@@ -1,0 +1,26 @@
+# credentials / secrets
+.env
+*.pem
+*.key
+credentials*
+config/settings.yaml
+.config/earthengine/
+
+# ข้อมูลดิบ / ผลลัพธ์ (ห้ามขึ้น repo)
+data/
+*.parquet
+*.tif
+*.tiff
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.ipynb_checkpoints/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
