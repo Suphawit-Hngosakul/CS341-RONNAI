@@ -1,0 +1,7 @@
+# M1 (Checkpoint)
+boto3
+pandas
+pyarrow
+pyyaml
+geopandas
+earthengine-api
