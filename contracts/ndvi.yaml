@@ -1,0 +1,62 @@
+# Data contract: NDVI (Issue #8) — ผลิตโดย gee/ronnai_community_zonal.js (Issue #5)
+# ระดับกฎ: BLOCK = ไม่ผ่าน ส่งแถว/batch ไป quarantine | STANDARDIZE = แก้แล้วผ่าน | WARN = ผ่านแต่ log
+source: ndvi
+version: 1
+description: NDVI ต่อชุมชน x buffer x ปี (Sentinel-2 L2A, mask ด้วย SCL, ช่วงเวลาเดียวกับ LST)
+format: csv
+encoding: utf-8            # ไม่มี BOM
+key: [community_id, buffer_m, year]
+master_list:
+  path: gee/communities.csv
+  column: community_id
+
+standardize:
+  - strip_bom_from_header
+  - trim_whitespace
+  - cast_types
+
+table_checks:
+  - {rule: required_columns,  level: BLOCK}
+  - {rule: row_count_min,     value: 1, level: BLOCK}
+  - {rule: unique_key,        level: BLOCK}
+
+columns:
+  - name: community_id
+    type: string
+    nullable: false
+    checks:
+      - {rule: in_master_list, level: BLOCK}
+  - name: buffer_m
+    type: int
+    unit: m
+    nullable: false
+    checks:
+      - {rule: allowed_values, values: [300, 500], level: BLOCK}
+  - name: year
+    type: int
+    nullable: false
+  - name: ndvi_mean
+    type: float
+    unit: index
+    nullable: false
+    checks:
+      - {rule: range, min: -1, max: 1, level: BLOCK}
+  - name: green_ratio              # สัดส่วน pixel ที่ NDVI > 0.3
+    type: float
+    unit: ratio
+    nullable: false
+    checks:
+      - {rule: range, min: 0, max: 1, level: BLOCK}
+  - name: valid_pixel_ratio
+    type: float
+    unit: ratio
+    nullable: false
+    checks:
+      - {rule: range, min: 0, max: 1, level: BLOCK}
+      - {rule: min,   value: 0.3, level: WARN}     # < 0.3 = เมฆบังมาก
+  - name: n_scenes
+    type: int
+    unit: scenes
+    nullable: false
+    checks:
+      - {rule: min, value: 0, level: BLOCK}
