@@ -2,7 +2,7 @@
 // RONNAI · M1 · Issue #4 (LST) + #5 (NDVI) + #6 (อาคาร)
 // Zonal stats ต่อ "ชุมชน × buffer × ปี" -> CSV 3 ไฟล์ (lst, ndvi, buildings) ส่งเข้า ingestion #7
 //
-// credit: อ้างอิง/ดัดแปลงจากโค้ดของอาจารย์หมู  <-- ใส่ชื่อ/ลิงก์จริงตรงนี้
+// credit: อ้างอิง/ดัดแปลงจากโค้ดของอาจารย์หมู  https://code.earthengine.google.com/?accept_repo=users/moukomlasitthisak/BDI_Day_1
 // logic ลบเมฆ + แปลง LST ต่อยอดจากสคริปต์ราย cell เขตหลักสี่ (ไฟล์เดิม)
 //
 // ใช้ได้ 2 แบบ: (ก) วางเป็นสคริปต์แยกใน gee/  (ข) วางต่อท้ายไฟล์เดิม
