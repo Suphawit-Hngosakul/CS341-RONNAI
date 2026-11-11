@@ -5,7 +5,7 @@ aws:
   region: us-east-1               # AWS Academy Learner Lab ใช้ us-east-1
   profile: default                # ชื่อ AWS CLI profile (ไม่ใช่ key)
 s3:
-  bucket: cs341-ronnai-477710504722   # สคริปต์ setup ตั้งชื่อนี้ให้ (account_id = เลข AWS account)
+  bucket: cs341-ronnai-<account_id>   # สคริปต์ setup ตั้งชื่อนี้ให้ (account_id = เลข AWS account)
   prefixes:
     incoming: incoming/
     raw: raw/

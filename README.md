@@ -25,6 +25,14 @@
 
 TODO (เติมใน #15): คำสั่งรัน ingest → gate → MERGE → verify
 
+**ขั้นที่ 1: นำเข้า incoming → raw** (Issue #11) รายละเอียดใน [`ingestion/README.md`](ingestion/README.md)
+```powershell
+python ingestion\ingest.py --file data\gee_2026\lst_2026.csv       --source lst       --year 2026
+python ingestion\ingest.py --file data\gee_2026\ndvi_2026.csv      --source ndvi      --year 2026
+python ingestion\ingest.py --file data\gee_2026\buildings_2026.csv --source buildings --year 2026
+python ingestion\ingest.py --list
+```
+
 ## โครงสร้างข้อมูล
 
 | Zone (S3 prefix) | เก็บอะไร |
