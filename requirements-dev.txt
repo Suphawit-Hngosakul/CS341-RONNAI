@@ -1,0 +1,4 @@
+# สำหรับรัน unit test (ไม่ต้องใช้ตอนรัน pipeline จริง)
+-r requirements.txt
+pytest
+moto[s3]>=5
