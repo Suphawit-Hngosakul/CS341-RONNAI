@@ -1,10 +1,10 @@
 # คัดลอกเป็น config/settings.yaml แล้วแก้ค่า (ไฟล์จริงถูก .gitignore ไว้)
 # ห้ามใส่ access key / secret ในไฟล์นี้
 aws:
-  region: ap-southeast-1          # TODO: ใส่ region ที่ใช้จริง
+  region: us-east-1               # Learner Lab ใช้ us-east-1
   profile: default                # ชื่อ AWS CLI profile (ไม่ใช่ key)
 s3:
-  bucket: your-bucket-name        # TODO: ใส่ชื่อ bucket จริง
+  bucket: ronnai-datalake-<account-id>-us-east-1   # infra deploy เขียนค่าจริงให้
   prefixes:
     incoming: incoming/
     raw: raw/
@@ -17,4 +17,4 @@ glue:
     trusted: ronnai_trusted
     curated: ronnai_curated
 athena:
-  workgroup: ronnai-wg            # TODO: ใส่ชื่อ workgroup จริง
+  workgroup: ronnai-wg

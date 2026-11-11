@@ -14,6 +14,11 @@
    ```
 2. คัดลอกค่าตั้งต้น: `config/settings.example.yaml` → `config/settings.yaml` แล้วแก้ bucket / region / workgroup
 3. ตั้งค่า AWS credentials ผ่าน AWS CLI profile (ห้ามใส่ key ใน repo)
+4. สร้าง AWS infra (S3 zones, Glue, Athena) บน Learner Lab ด้วยคำสั่งเดียว (รายละเอียดใน [`infra/README.md`](infra/README.md))
+   ```bash
+   python infra/ronnai_infra.py deploy   # สร้าง และเขียน config/settings.yaml ให้อัตโนมัติ
+   python infra/ronnai_infra.py verify   # เช็คครบ + SELECT 1 ใน Athena
+   ```
 
 ## Run pipeline
 
@@ -33,6 +38,7 @@ TODO (เติมใน #15): คำสั่งรัน ingest → gate → M
 ## โครงสร้าง folder
 
 ```
+infra/          # CloudFormation + CLI สร้าง/ลบ AWS (Issue #2)
 gee/            # สคริปต์ GEE
 ingestion/      # upload + validation gate
 contracts/      # data contract (YAML) ต่อแหล่ง
