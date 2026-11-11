@@ -82,3 +82,90 @@ echo $LASTEXITCODE   # 2
 pip install -r requirements-dev.txt
 python -m pytest tests -q
 ```
+
+---
+
+# Validation gate: raw → trusted / quarantine (Issue #13)
+
+`validate_gate.py` อ่าน batch จาก `raw/` แล้วตรวจทุกแถวตาม `contracts/<source>.yaml`
+
+```
+raw/source=lst/batch_id=<id>/lst_2026.csv
+        │  STANDARDIZE → BLOCK → WARN
+        ├── ผ่าน ──► trusted/lst/year=2026/lst.parquet          (upsert ตาม key)
+        └── ไม่ผ่าน ► quarantine/lst/<batch_id>/rows.csv + report.json   (ไม่ลบ ไม่เขียนทับ)
+```
+
+## วิธีรัน (PowerShell ที่โฟลเดอร์ repo)
+```powershell
+# ตรวจ batch ล่าสุดของแต่ละแหล่งใน raw/ (ต้อง ingest ก่อน)
+python ingestion\validate_gate.py --source lst       --latest
+python ingestion\validate_gate.py --source ndvi      --latest
+python ingestion\validate_gate.py --source buildings --latest
+
+# หรือระบุ batch เอง
+python ingestion\validate_gate.py --source lst --batch-id lst_2026_20261111T1200
+
+# ลองบนเครื่องโดยไม่แตะ AWS (เขียนผลลง .local_lake\ ด้วย layout เดียวกับ S3)
+python ingestion\validate_gate.py --local --file data\gee_2026\lst_2026.csv --source lst --year 2026
+```
+
+## ระดับกฎ (มาจาก contract)
+| ระดับ | ทำอะไร | ตัวอย่าง |
+|---|---|---|
+| **STANDARDIZE** | แก้ให้อัตโนมัติก่อนตรวจ แล้วนับจำนวนไว้ใน report | ตัด BOM, ตัดช่องว่าง, ชื่อคอลัมน์เป็นตัวเล็ก/ช่องว่างเป็น `_`, `building_count` `751.0` → `751` |
+| **BLOCK (แถว)** | แถวนั้นไป quarantine | `lst_mean` นอก 15–70, `community_id` ไม่อยู่ใน `gee/communities.csv`, `buffer_m` ไม่ใช่ 300/500, ค่าว่างในคอลัมน์ที่ห้ามว่าง, ชนิดข้อมูลผิด, `year` ไม่ตรงปีของ batch, key ซ้ำ (กักทุกแถวที่ชนกัน) |
+| **BLOCK (ทั้ง batch)** | ทั้งไฟล์ไป quarantine (เก็บไฟล์ต้นฉบับ) ไม่แตะ trusted | คอลัมน์ที่ต้องมีหายไป, ไฟล์ว่าง, อ่าน CSV ไม่ได้ |
+| **WARN** | ผ่านเข้า trusted แต่จดใน log/report | `valid_pixel_ratio < 0.3`, `building_count = 0` หรือว่าง, มีคอลัมน์เกิน (ไม่เอาเข้า trusted) |
+
+แถวที่ผิดหลายกฎนับเป็น 1 แถวใน `quarantined` แต่ไปโผล่ในทุกกฎที่ผิดใน `violations`
+สคริปต์ตรวจว่า **ผ่าน + กัก = จำนวนแถว input** ทุกครั้ง
+
+## ผลลัพธ์
+- **trusted** `trusted/<source>/year=<year>/<source>.parquet` ไฟล์เดียวต่อแหล่งต่อปี
+  - คอลัมน์ตาม contract **ยกเว้น `year`** (อยู่ใน path เป็น partition แบบ Hive) + `batch_id` (มาจาก batch ไหน)
+  - ชนิด: string → `string`, int → `bigint` (int64), float → `double` (ใช้ตอนเขียน `CREATE EXTERNAL TABLE` ลงทะเบียน trusted ใน Glue)
+  - **upsert ตาม key**: แถวที่ key ตรงกับ batch ใหม่ถูกแทน แถวอื่นคงไว้ ⇒ รันซ้ำไม่เกิดแถวซ้ำ และถ้า batch ใหม่มีแถวผิด ค่าเดิมที่ถูกใน trusted ยังอยู่
+- **quarantine** `quarantine/<source>/<batch_id>/` (สร้างเฉพาะเมื่อมีแถวถูกกัก)
+  - `rows.csv` แถวที่ไม่ผ่าน (ค่าดิบ) + `_row_number` (บรรทัดในไฟล์) + `_violations`
+  - `report.json` ผิดกฎข้อไหน กี่แถว ตัวอย่างแถว
+  - ถ้ากักทั้ง batch จะเก็บไฟล์ต้นฉบับทั้งไฟล์แทน `rows.csv`
+  - **ไม่ลบ ไม่เขียนทับ**: ถ้าโฟลเดอร์ของ batch นี้มีอยู่แล้ว สคริปต์หยุดทันที (exit 2)
+- **log** `logs/gate/<batch_id>.json` (บนเครื่อง) report ของทุก batch รวมที่ผ่านหมดและ WARN
+
+ตัวอย่าง `report.json`
+```json
+{"batch_id": "lst_2026_20261111T1200", "source": "lst", "year": 2026, "status": "PARTIAL",
+ "total_rows": 74, "passed": 71, "quarantined": 3,
+ "violations": [{"rule": "lst_mean between 15 and 70", "level": "BLOCK", "rows": 1,
+                 "example": {"_row_number": 15, "community_id": "C0014", "buffer_m": 300, "year": 2026, "lst_mean": 120.4}}, ...],
+ "warnings": [], "standardized": {"trim_whitespace": 1}}
+```
+
+exit code: `0` ผ่าน (รวมกรณีกักบางแถว), `1` input ผิด, `2` batch นี้อยู่ใน quarantine แล้ว, `3` ปัญหา AWS, `4` กักทั้ง batch
+
+## Demo: ไฟล์ที่ตั้งใจให้ผิด
+`tests/fixtures/lst_2026_bad_demo.csv` = ข้อมูล LST จริง 72 แถว + แก้/เพิ่มให้ผิด
+| บรรทัด | แก้อะไร | ผล |
+|---|---|---|
+| 15 | C0014/300 `lst_mean = 120.4` | BLOCK `lst_mean between 15 and 70` |
+| 42 | `"  C0005 "` มีช่องว่าง | STANDARDIZE ตัดช่องว่าง → ผ่าน |
+| 74 | เพิ่ม `C9999` (ไม่มีชุมชนนี้) | BLOCK `community_id in master list` |
+| 75 | เพิ่ม C0020 `buffer_m = 400` | BLOCK `buffer_m in [300, 500]` |
+
+ผลที่ต้องได้: input 74 → ผ่าน 71 + กัก 3
+```powershell
+python ingestion\ingest.py --file tests\fixtures\lst_2026_bad_demo.csv --source lst --year 2026
+python ingestion\validate_gate.py --source lst --latest
+aws s3 cp s3://<bucket>/quarantine/lst/<batch_id>/report.json -
+```
+เพราะ trusted เป็น upsert ค่า C0014/300 ที่ถูกใน trusted ยังอยู่ (ไม่ถูกแทนด้วย 120.4) demo จึงไม่ทำให้ข้อมูลจริงเสีย
+แต่ batch demo จะอยู่ใน quarantine ตลอด (ไม่ลบ) ซึ่งเป็นพฤติกรรมที่ต้องการ
+
+`tests/fixtures/lst_2026_missing_column.csv` (ไม่มีคอลัมน์ `lst_p90`) ใช้โชว์การกักทั้ง batch
+
+## Unit test
+```powershell
+python -m pytest tests -q
+```
+`tests/test_validate_gate.py` ครอบ: STANDARDIZE, BLOCK ทุกกฎ, WARN, กักทั้ง batch, ห้ามเขียนทับ quarantine, upsert trusted, ข้อมูลจริง 3 แหล่ง (ข้ามถ้าไม่มี `data/gee_2026/`), S3 จำลองด้วย moto
