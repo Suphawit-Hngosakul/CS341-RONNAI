@@ -14,6 +14,12 @@
    ```
 2. คัดลอกค่าตั้งต้น: `config/settings.example.yaml` → `config/settings.yaml` แล้วแก้ bucket / region / workgroup
 3. ตั้งค่า AWS credentials ผ่าน AWS CLI profile (ห้ามใส่ key ใน repo)
+4. สร้าง S3 zones, Glue databases และ Athena workgroup บน Learner Lab ด้วยคำสั่งเดียว (Issue #2) — รายละเอียดใน [`infra/README.md`](infra/README.md)
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File infra\ronnai_aws.ps1 -Action setup
+   powershell -ExecutionPolicy Bypass -File infra\ronnai_aws.ps1 -Action verify
+   ```
+   (macOS/Linux/Terminal ของ Learner Lab: `bash infra/ronnai_aws.sh setup` แล้ว `bash infra/ronnai_aws.sh verify`)
 
 ## Run pipeline
 
