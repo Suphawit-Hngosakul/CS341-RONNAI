@@ -33,6 +33,13 @@ python ingestion\ingest.py --file data\gee_2026\buildings_2026.csv --source buil
 python ingestion\ingest.py --list
 ```
 
+**ขั้นที่ 2: Validation gate raw → trusted / quarantine** (Issue #13) รายละเอียดใน [`ingestion/README.md`](ingestion/README.md#validation-gate-raw--trusted--quarantine-issue-13)
+```powershell
+python ingestion\validate_gate.py --source lst       --latest
+python ingestion\validate_gate.py --source ndvi      --latest
+python ingestion\validate_gate.py --source buildings --latest
+```
+
 ## โครงสร้างข้อมูล
 
 | Zone (S3 prefix) | เก็บอะไร |
