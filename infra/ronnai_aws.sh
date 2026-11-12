@@ -4,13 +4,17 @@
 #
 #   ใช้ได้ใน: Terminal ของ Learner Lab, AWS CloudShell, Git Bash (Windows), macOS/Linux
 #
+#   ./infra/ronnai_aws.sh all        คำสั่งเดียวตั้งแต่บัญชีว่าง: setup -> deploy -> view -> run (รันซ้ำได้)
 #   ./infra/ronnai_aws.sh setup      สร้าง S3 bucket + 6 zones, Glue DB 2 อัน, Athena workgroup
 #   ./infra/ronnai_aws.sh verify     ตรวจว่าครบ + รัน SELECT 1 ใน Athena
-#   ./infra/ronnai_aws.sh deploy     สร้างตาราง trusted (sql/glue_trusted.sql) + สร้าง/อัปเดต Lambda 5 ตัว (function/)
-#                                    + กฎ EventBridge ให้ต่อกันเอง
-#                                    อัปโหลดไฟล์เข้า incoming/ -> check -> ingest -> validate -> transform -> verify
+#   ./infra/ronnai_aws.sh deploy     สร้างตาราง trusted (sql/glue_trusted.sql) + สร้าง/อัปเดต Lambda 6 ตัว (function/)
+#                                    + state machine ของ Step Functions (infra/state_machine.asl.json)
+#                                    + กฎ EventBridge 1 ข้อ: ไฟล์ใหม่ใน incoming/ -> Lambda start-pipeline -> เริ่ม execution
+#                                    ใน execution: check -> ingest -> validate -> transform -> verify
+#   ./infra/ronnai_aws.sh run        (Issue #18) อัปโหลด data/gee_<YEAR>/ ทั้ง 3 แหล่งเข้า incoming/ แล้วรอดูผลทีละขั้น
+#                                    YEAR=2026 เป็นค่าเริ่มต้น  รันซ้ำได้: ไฟล์เดิมจะจบที่ AlreadyProcessed
 #   ./infra/ronnai_aws.sh view       สร้างตาราง curated (ถ้ายังไม่มี) + view ตอบ Q1 (sql/views/heat_vs_green.sql)
-#   ./infra/ronnai_aws.sh destroy    ลบทุกอย่าง: Lambda + กฎ EventBridge + workgroup + Glue + bucket
+#   ./infra/ronnai_aws.sh destroy    ลบทุกอย่าง: state machine + Lambda + กฎ EventBridge + workgroup + Glue + bucket
 #                                    (ข้อมูลหายถาวร ต้องพิมพ์ชื่อ bucket ยืนยัน) ชื่อเดิม `teardown` ใช้ได้เหมือนกัน
 #
 #   เลข account/ชื่อ bucket ในไฟล์ SQL (cs341-ronnai-<เลข>) ถูกแทนด้วย bucket ของบัญชีที่ล็อกอินอยู่ให้เองตอนรัน
@@ -42,9 +46,14 @@ PY_VERSION="${RUNTIME#python}"
 NAME_PREFIX="${NAME_PREFIX:-ronnai}"
 VIEWS_SQL="${VIEWS_SQL:-sql/views/heat_vs_green.sql}"   # view ตอบ Q1 (path เทียบกับ repo)
 TRUSTED_SQL="${TRUSTED_SQL:-sql/glue_trusted.sql}"      # ตาราง trusted ใน Glue (path เทียบกับ repo)
+SFN_NAME="${SFN_NAME:-}"                      # เว้นว่าง = <NAME_PREFIX>-pipeline
+ASL_FILE="${ASL_FILE:-infra/state_machine.asl.json}"    # นิยาม state machine (path เทียบกับ repo)
+YEAR="${YEAR:-2026}"                          # ใช้กับ run
+RUN_WAIT_SEC="${RUN_WAIT_SEC:-900}"           # run รอ execution จบได้นานสุดกี่วินาที
 PKG_PREFIX="${PKG_PREFIX:-lambda-packages/}"  # ที่เก็บ zip ใน bucket (zip ของ validate เกิน 50 MB ต้องส่งผ่าน S3)
 # ชื่อ Lambda : โฟลเดอร์ใน function/ : timeout (วินาที) : memory (MB) : ชุดไลบรารี (light/heavy)
 FUNCS=(
+  "start-pipeline:start_function:30:128:light"
   "check-batch:batch_function:60:256:light"
   "ingest-batch:ingest_function:120:512:light"
   "validate-batch:validate_function:300:2048:heavy"
@@ -56,7 +65,23 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 SETTINGS_FILE="$REPO_DIR/config/settings.yaml"
 TMP_DIR="$(mktemp -d)"
+# Git Bash บน Windows: aws.exe อ่าน path แบบ /tmp/... ใน file:// ไม่ได้ (ไม่ถูกแปลงให้)
+# แปลงเป็น C:/Users/.../Temp/... ซึ่งทั้ง bash และ aws.exe/python.exe ใช้ได้
+if command -v cygpath >/dev/null 2>&1; then
+  TMP_DIR="$(cygpath -m "$TMP_DIR")"
+  REPO_DIR="$(cygpath -m "$REPO_DIR")"
+  SETTINGS_FILE="$REPO_DIR/config/settings.yaml"
+fi
 trap 'rm -rf "$TMP_DIR"' EXIT
+
+find_python() {   # python ตัวแรกที่รันได้จริง (บน Windows python3 อาจเป็นแค่ทางลัดไป Microsoft Store)
+  local c
+  for c in python3 python py; do
+    command -v "$c" >/dev/null 2>&1 && "$c" -c 'import sys; sys.exit(sys.version_info < (3, 8))' >/dev/null 2>&1 \
+      && { command -v "$c"; return 0; }
+  done
+  return 0
+}
 
 ok()   { printf '  \033[32m[OK]\033[0m   %s\n' "$*"; }
 skip() { printf '  \033[36m[SKIP]\033[0m %s\n' "$*"; }
@@ -299,10 +324,10 @@ verify() {
 }
 
 # ---------------------------------------------------------------------------
-# deploy: Lambda 5 ตัว + EventBridge
+# deploy: Lambda 6 ตัว + Step Functions + กฎ EventBridge (S3 -> Lambda start-pipeline -> state machine)
 
 preflight_deploy() {   # ตรวจเพิ่มสำหรับ deploy (ต้องรัน preflight ก่อน)
-  PY="$(command -v python3 || command -v python || true)"
+  PY="$(find_python)"
   [[ -n "$PY" ]] || die "ไม่พบ python3"
   "$PY" -m pip --version >/dev/null 2>&1 || die "ไม่พบ pip ($PY -m pip)"
   [[ -z "$ROLE_ARN" ]] && ROLE_ARN="arn:aws:iam::${ACCOUNT_ID}:role/LabRole"
@@ -361,9 +386,10 @@ build_packages() {
 }
 
 deploy_lambdas() {
-  step "Lambda 5 ตัว"
+  step "Lambda 6 ตัว (start-pipeline + 5 ขั้นของ state machine)"
   local spec name dir to mem kind fn key envs
-  envs="Variables={BUCKET=$BUCKET,ATHENA_WORKGROUP=$WORKGROUP,CURATED_DB=$DB_CURATED,TRUSTED_DB=$DB_TRUSTED}"
+  # PIPELINE_EVENTS=off: Step Functions เป็นตัวเรียกขั้นถัดไป Lambda ไม่ต้องส่ง event ต่อกันเองแล้ว
+  envs="Variables={BUCKET=$BUCKET,ATHENA_WORKGROUP=$WORKGROUP,CURATED_DB=$DB_CURATED,TRUSTED_DB=$DB_TRUSTED,PIPELINE_EVENTS=off,STATE_MACHINE_ARN=$(sfn_arn)}"
   for spec in "${FUNCS[@]}"; do
     IFS=: read -r name dir to mem kind <<<"$spec"
     fn="$NAME_PREFIX-$name"
@@ -389,30 +415,43 @@ deploy_lambdas() {
   done
 }
 
-# กฎ EventBridge: ชื่อกฎ | event pattern | Lambda ปลายทาง
-rule_pattern() {   # rule_pattern <detail-type> : event ที่ Lambda ของ pipeline ส่งต่อกัน
-  printf '{"source": ["ronnai.pipeline"], "detail-type": ["%s"]}' "$1"
-}
+sfn_arn() { printf 'arn:aws:states:%s:%s:stateMachine:%s' "$REGION" "$ACCOUNT_ID" "${SFN_NAME:-$NAME_PREFIX-pipeline}"; }
+OLD_CHAIN_RULES=(batch-checked batch-ingested batch-validated curated-transformed)   # กฎของแบบเดิม (Lambda ส่ง event ต่อกันเอง)
 
-put_rule() {       # put_rule <ชื่อกฎ> <pattern-json> <ชื่อ lambda (เช่น ingest-batch)>
-  local rule="$1" pattern="$2" name="$3" fn arn err
-  fn="$NAME_PREFIX-$name"
-  arn="$(aws_ lambda get-function --function-name "$fn" --query 'Configuration.FunctionArn' --output text)"
-  printf '%s' "$pattern" >"$TMP_DIR/pattern.json"
-  aws_ events put-rule --name "$rule" --event-pattern "file://$TMP_DIR/pattern.json" --state ENABLED >/dev/null \
-    || die "สร้างกฎ $rule ไม่ได้"
-  if ! err="$(aws_ lambda add-permission --function-name "$fn" --statement-id "events-$rule" \
-        --action lambda:InvokeFunction --principal events.amazonaws.com \
-        --source-arn "arn:aws:events:$REGION:$ACCOUNT_ID:rule/$rule" 2>&1)"; then
-    grep -q ResourceConflictException <<<"$err" || die "ให้สิทธิ์กฎ $rule เรียก $fn ไม่ได้: $err"
+delete_rule() {    # delete_rule <ชื่อกฎ>  ลบ target ก่อนแล้วลบกฎ (ไม่มี -> ข้าม)
+  local rule="$1" ids
+  if aws_ events describe-rule --name "$rule" >/dev/null 2>&1; then
+    ids="$(aws_ events list-targets-by-rule --rule "$rule" --query 'Targets[].Id' --output text 2>/dev/null || true)"
+    if [[ -n "$ids" && "$ids" != "None" ]]; then aws_ events remove-targets --rule "$rule" --ids $ids >/dev/null; fi
+    aws_ events delete-rule --name "$rule" >/dev/null && ok "ลบ $rule" || fail "ลบ $rule ไม่ได้"
+  else
+    skip "ไม่พบ $rule"
   fi
-  aws_ events put-targets --rule "$rule" --targets "Id=1,Arn=$arn" >/dev/null || die "ผูกกฎ $rule กับ $fn ไม่ได้"
-  ok "กฎ $rule -> $fn"
 }
 
-enable_event_chain() {
-  step "EventBridge: อัปโหลดไฟล์เข้า incoming/ แล้ว Lambda ต่อกันเอง"
-  local cur compact
+deploy_state_machine() {
+  local name="${SFN_NAME:-$NAME_PREFIX-pipeline}" arn
+  arn="$(sfn_arn)"
+  step "Step Functions: $name"
+  [[ -f "$REPO_DIR/$ASL_FILE" ]] || die "ไม่พบ $ASL_FILE"
+  sed -e "s|\${REGION}|$REGION|g" -e "s|\${ACCOUNT_ID}|$ACCOUNT_ID|g" -e "s|\${NAME_PREFIX}|$NAME_PREFIX|g" \
+    "$REPO_DIR/$ASL_FILE" >"$TMP_DIR/asl.json"
+  if aws_ stepfunctions describe-state-machine --state-machine-arn "$arn" >/dev/null 2>&1; then
+    aws_ stepfunctions update-state-machine --state-machine-arn "$arn" \
+      --definition "file://$TMP_DIR/asl.json" --role-arn "$ROLE_ARN" >/dev/null \
+      || die "อัปเดต state machine $name ไม่ได้"
+    ok "อัปเดต $name"
+  else
+    aws_ stepfunctions create-state-machine --name "$name" --type STANDARD \
+      --definition "file://$TMP_DIR/asl.json" --role-arn "$ROLE_ARN" >/dev/null \
+      || die "สร้าง state machine $name ไม่ได้ (ตรวจ role $ROLE_ARN และสิทธิ์ Step Functions)"
+    ok "สร้าง $name"
+  fi
+}
+
+enable_trigger() {
+  step "EventBridge: ไฟล์ใหม่ใน incoming/ -> เริ่ม execution ของ state machine"
+  local cur compact rule="$NAME_PREFIX-incoming-csv" r
   cur="$(aws_ s3api get-bucket-notification-configuration --bucket "$BUCKET" --output json 2>/dev/null || true)"
   compact="${cur//[[:space:]]/}"
   if grep -q 'EventBridgeConfiguration' <<<"$cur"; then
@@ -425,13 +464,26 @@ enable_event_chain() {
   else
     die "bucket มี notification (Lambda/SNS/SQS) ตั้งไว้แล้ว การตั้งใหม่จะเขียนทับของเดิม จึงหยุดไว้ก่อน — เปิด EventBridge เองที่ S3 > bucket > Properties แล้วรันใหม่"
   fi
-  put_rule "$NAME_PREFIX-incoming-csv" \
-    "{\"source\": [\"aws.s3\"], \"detail-type\": [\"Object Created\"], \"detail\": {\"bucket\": {\"name\": [\"$BUCKET\"]}, \"object\": {\"key\": [{\"prefix\": \"incoming/\"}]}}}" \
-    check-batch
-  put_rule "$NAME_PREFIX-batch-checked"       "$(rule_pattern BatchChecked)"       ingest-batch
-  put_rule "$NAME_PREFIX-batch-ingested"      "$(rule_pattern BatchIngested)"      validate-batch
-  put_rule "$NAME_PREFIX-batch-validated"     "$(rule_pattern BatchValidated)"     transform-batch
-  put_rule "$NAME_PREFIX-curated-transformed" "$(rule_pattern CuratedTransformed)" verify-batch
+  printf '%s' "{\"source\": [\"aws.s3\"], \"detail-type\": [\"Object Created\"], \"detail\": {\"bucket\": {\"name\": [\"$BUCKET\"]}, \"object\": {\"key\": [{\"prefix\": \"incoming/\"}]}}}" \
+    >"$TMP_DIR/pattern.json"
+  aws_ events put-rule --name "$rule" --event-pattern "file://$TMP_DIR/pattern.json" --state ENABLED >/dev/null \
+    || die "สร้างกฎ $rule ไม่ได้"
+  # EventBridge -> Step Functions ตรง ๆ ต้องใช้ RoleArn ที่ LabRole ไม่ยอม (execution ไม่เริ่มเลย ไม่มี error)
+  # จึงยิงเข้า Lambda start-pipeline (ใช้ resource policy) แล้ว Lambda เรียก StartExecution ให้
+  local fn="$NAME_PREFIX-start-pipeline" fn_arn err
+  fn_arn="$(aws_ lambda get-function --function-name "$fn" --query 'Configuration.FunctionArn' --output text | tr -d '\r')"
+  if ! err="$(aws_ lambda add-permission --function-name "$fn" --statement-id "events-$rule" \
+        --action lambda:InvokeFunction --principal events.amazonaws.com \
+        --source-arn "arn:aws:events:$REGION:$ACCOUNT_ID:rule/$rule" 2>&1)"; then
+    grep -q ResourceConflictException <<<"$err" || die "ให้สิทธิ์กฎ $rule เรียก $fn ไม่ได้: $err"
+  fi
+  aws_ events put-targets --rule "$rule" --targets "Id=1,Arn=$fn_arn" >/dev/null \
+    || die "ผูกกฎ $rule กับ $fn ไม่ได้"
+  ok "กฎ $rule -> $fn -> $(sfn_arn)"
+  aws_ lambda remove-permission --function-name "$NAME_PREFIX-check-batch" --statement-id "events-$rule" >/dev/null 2>&1 || true
+
+  step "ลบกฎ EventBridge ของแบบเดิม (Lambda ต่อกันเอง) ถ้ามี"
+  for r in "${OLD_CHAIN_RULES[@]}"; do delete_rule "$NAME_PREFIX-$r"; done
 }
 
 create_trusted_tables() {   # CREATE EXTERNAL TABLE + MSCK REPAIR จาก glue_trusted.sql (แทนชื่อ bucket ให้ตรงบัญชี)
@@ -470,18 +522,80 @@ deploy() {
   create_trusted_tables
   build_packages
   deploy_lambdas
-  enable_event_chain
+  deploy_state_machine
+  enable_trigger
   step "เสร็จเรียบร้อย"
   printf '%s\n' \
-    "  Flow อัตโนมัติ: incoming/<source>_<year>.csv -> check -> ingest -> validate -> transform -> verify" \
+    "  Flow อัตโนมัติ: incoming/<source>_<year>.csv -> Step Functions $(sfn_arn)" \
+    "                  CheckBatch -> IngestBatch -> ValidateBatch -> TransformCurated -> VerifyCurated" \
     "  ต่อด้วย: ./infra/ronnai_aws.sh view   (สร้างตาราง curated + view ตอบ Q1)" \
-    "  ทดสอบ: อัปโหลดไฟล์ข้อมูลเข้า incoming/ (ครบ 3 แหล่ง ตัวสุดท้ายจะทำให้ transform + verify ทำงาน)" \
-    "    aws s3 cp data/gee_2026/lst_2026.csv       s3://$BUCKET/incoming/lst_2026.csv" \
-    "    aws s3 cp data/gee_2026/ndvi_2026.csv      s3://$BUCKET/incoming/ndvi_2026.csv" \
-    "    aws s3 cp data/gee_2026/buildings_2026.csv s3://$BUCKET/incoming/buildings_2026.csv" \
-    "  ไฟล์ซ้ำ (เคยสำเร็จแล้ว) จะถูกย้ายไป s3://$BUCKET/quarantine/duplicate/" \
-    "  ดู log:  aws logs tail /aws/lambda/$NAME_PREFIX-check-batch --since 10m   (เปลี่ยนชื่อ -check-batch เป็นขั้นอื่นได้)" \
-    "  ทดสอบ Lambda ทีละตัวโดยไม่ให้ไหลต่อ: ตั้ง env PIPELINE_EVENTS=off ที่ Lambda ตัวนั้นก่อน"
+    "  รันทั้ง pipeline: ./infra/ronnai_aws.sh run   (อัปโหลด data/gee_$YEAR/ ทั้ง 3 แหล่ง แล้วรอดูผลแต่ละขั้น)" \
+    "  ไฟล์ซ้ำ (เคยสำเร็จแล้ว) จะถูกย้ายไป s3://$BUCKET/quarantine/duplicate/ และ execution จบที่ AlreadyProcessed" \
+    "  ดูทีละขั้น: Step Functions console > $NAME_PREFIX-pipeline > execution > Graph view" \
+    "  ดู log ของ Lambda: aws logs tail /aws/lambda/$NAME_PREFIX-check-batch --since 10m"
+}
+
+# ---------------------------------------------------------------------------
+# run (Issue #18): อัปโหลด 3 แหล่งเข้า incoming/ แล้วรอดู execution ที่เกิดขึ้น
+run_pipeline() {
+  preflight
+  local arn dir src f before all new running n waited=0 ex status out states
+  arn="$(sfn_arn)"
+  aws_ stepfunctions describe-state-machine --state-machine-arn "$arn" >/dev/null 2>&1 \
+    || die "ไม่พบ state machine $arn — รัน './infra/ronnai_aws.sh deploy' ก่อน"
+  dir="$REPO_DIR/data/gee_$YEAR"
+  for src in lst ndvi buildings; do
+    [[ -f "$dir/${src}_$YEAR.csv" ]] || die "ไม่พบ $dir/${src}_$YEAR.csv (ตั้ง YEAR=... ได้)"
+  done
+  list_execs() {
+    aws_ stepfunctions list-executions --state-machine-arn "$arn" --max-results 100 --no-paginate \
+      --query 'executions[].executionArn' --output text | tr -d '\r' | tr '\t' '\n' | grep -v '^None$' | sort || true
+  }
+  before="$(list_execs)"
+
+  step "อัปโหลดเข้า s3://$BUCKET/incoming/ (ปี $YEAR)"
+  for src in lst ndvi buildings; do
+    f="${src}_$YEAR.csv"
+    aws_ s3 cp "$dir/$f" "s3://$BUCKET/incoming/$f" --only-show-errors || die "อัปโหลด $f ไม่ได้"
+    ok "$f"
+  done
+
+  step "รอ execution ทั้ง 3 จบ (สูงสุด $RUN_WAIT_SEC วินาที)"
+  while :; do
+    all="$(list_execs)"
+    new="$(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$all") | grep -v '^$' || true)"
+    n="$(grep -c . <<<"$new" || true)"
+    running=0
+    for ex in $new; do
+      [[ "$(aws_ stepfunctions describe-execution --execution-arn "$ex" --query status --output text | tr -d '\r')" == RUNNING ]] && running=$((running + 1))
+    done
+    printf '  ... %3ss  เริ่มแล้ว %s/3  กำลังรัน %s\n' "$waited" "$n" "$running"
+    (( n >= 3 && running == 0 )) && break
+    if (( n == 0 && waited >= 60 )); then
+      warn "ผ่านไป ${waited} วินาทียังไม่มี execution เริ่มเลย ดู log ของตัวเริ่ม:"
+      warn "  aws logs tail /aws/lambda/$NAME_PREFIX-start-pipeline --since 10m"
+    fi
+    (( waited >= RUN_WAIT_SEC )) && { warn "รอเกิน $RUN_WAIT_SEC วินาที ดูต่อที่ Step Functions console"; break; }
+    sleep 10; waited=$((waited + 10))
+  done
+
+  step "ผลแต่ละ execution (ขั้นที่ผ่าน -> สถานะ)"
+  local failed=0
+  for ex in $new; do
+    status="$(aws_ stepfunctions describe-execution --execution-arn "$ex" --query status --output text | tr -d '\r')"
+    states="$(aws_ stepfunctions get-execution-history --execution-arn "$ex" --max-results 200 --no-paginate \
+      --query "events[?type=='TaskStateExited' || type=='ChoiceStateExited' || type=='SucceedStateExited'].stateExitedEventDetails.name" \
+      --output text | tr -d '\r' | tr '\t' ' ' | sed 's/ / -> /g')"
+    out="$(aws_ stepfunctions describe-execution --execution-arn "$ex" \
+      --query '[output, error, cause]' --output text | tr -d '\r' | tr '\t' ' ' | cut -c1-300)"
+    case "$status" in
+      SUCCEEDED) ok "${ex##*:}  $status" ;;
+      *) fail "${ex##*:}  $status"; failed=1 ;;
+    esac
+    printf '         ขั้น: %s\n         %s\n' "${states:-"-"}" "$out"
+  done
+  printf '\n  ดูกราฟ: https://%s.console.aws.amazon.com/states/home?region=%s#/statemachines/view/%s\n' "$REGION" "$REGION" "$arn"
+  (( failed )) && die "มี execution ที่ไม่สำเร็จ" || ok "เสร็จ (รันซ้ำได้: ไฟล์เดิมจะจบที่ AlreadyProcessed)"
 }
 
 # ---------------------------------------------------------------------------
@@ -505,7 +619,7 @@ run_athena_file() {   # run_athena_file <ไฟล์ .sql 1 statement>  0 = ส
 
 view() {
   preflight
-  PY="$(command -v python3 || command -v python || true)"
+  PY="$(find_python)"
   [[ -n "$PY" ]] || die "ไม่พบ python3"
   step "ตาราง curated + view ตอบ Q1 (Athena)"
   if [[ ! -f "$REPO_DIR/$VIEWS_SQL" ]]; then
@@ -540,20 +654,18 @@ print(n)
 }
 
 # ---------------------------------------------------------------------------
-destroy_pipeline() {   # ลบกฎ EventBridge ก่อน (กัน event ไปเรียก Lambda ที่กำลังลบ) แล้วลบ Lambda
-  local rule spec name fn ids
-  local rules=("$NAME_PREFIX-incoming-csv" "$NAME_PREFIX-batch-checked" "$NAME_PREFIX-batch-ingested" \
-               "$NAME_PREFIX-batch-validated" "$NAME_PREFIX-curated-transformed")
+destroy_pipeline() {   # ลบกฎ EventBridge ก่อน (กันไฟล์ใหม่ไปเริ่ม execution) แล้วลบ state machine และ Lambda
+  local r spec name fn arn
   step "ลบกฎ EventBridge"
-  for rule in "${rules[@]}"; do
-    if aws_ events describe-rule --name "$rule" >/dev/null 2>&1; then
-      ids="$(aws_ events list-targets-by-rule --rule "$rule" --query 'Targets[].Id' --output text 2>/dev/null || true)"
-      if [[ -n "$ids" && "$ids" != "None" ]]; then aws_ events remove-targets --rule "$rule" --ids $ids >/dev/null; fi
-      aws_ events delete-rule --name "$rule" >/dev/null && ok "ลบ $rule" || fail "ลบ $rule ไม่ได้"
-    else
-      skip "ไม่พบ $rule"
-    fi
-  done
+  delete_rule "$NAME_PREFIX-incoming-csv"
+  for r in "${OLD_CHAIN_RULES[@]}"; do delete_rule "$NAME_PREFIX-$r"; done
+  step "ลบ state machine"
+  arn="$(sfn_arn)"
+  if aws_ stepfunctions describe-state-machine --state-machine-arn "$arn" >/dev/null 2>&1; then
+    aws_ stepfunctions delete-state-machine --state-machine-arn "$arn" >/dev/null && ok "ลบ ${arn##*:}" || fail "ลบ ${arn##*:} ไม่ได้"
+  else
+    skip "ไม่พบ ${arn##*:}"
+  fi
   step "ลบ Lambda"
   for spec in "${FUNCS[@]}"; do
     name="${spec%%:*}"; fn="$NAME_PREFIX-$name"
@@ -567,7 +679,7 @@ destroy_pipeline() {   # ลบกฎ EventBridge ก่อน (กัน event 
 
 destroy() {
   preflight
-  printf '\n\033[31mจะลบถาวร:\033[0m Lambda 5 ตัว (%s-*-batch), กฎ EventBridge 5 ข้อ, bucket s3://%s (รวม raw/ และ quarantine/), Glue DB %s %s, workgroup %s\n' \
+  printf '\n\033[31mจะลบถาวร:\033[0m state machine + Lambda 6 ตัว (%s-*), กฎ EventBridge, bucket s3://%s (รวม raw/ และ quarantine/), Glue DB %s %s, workgroup %s\n' \
     "$NAME_PREFIX" "$BUCKET" "$DB_TRUSTED" "$DB_CURATED" "$WORKGROUP"
   read -r -p "พิมพ์ชื่อ bucket เพื่อยืนยัน: " answer
   [[ "$answer" == "$BUCKET" ]] || die "ยกเลิก (ชื่อไม่ตรง)"
@@ -597,7 +709,9 @@ case "$ACTION" in
   setup)             setup ;;
   verify)            verify ;;
   deploy)            deploy ;;
+  run)               run_pipeline ;;
+  all)               setup; deploy; view; run_pipeline ;;
   view)              view ;;
   destroy|teardown)  destroy ;;
-  *) echo "usage: $0 {setup|verify|deploy|view|destroy}"; exit 2 ;;
+  *) echo "usage: $0 {all|setup|verify|deploy|run|view|destroy}"; exit 2 ;;
 esac
