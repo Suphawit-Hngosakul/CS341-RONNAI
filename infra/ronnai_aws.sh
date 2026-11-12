@@ -6,11 +6,15 @@
 #
 #   ./infra/ronnai_aws.sh setup      สร้าง S3 bucket + 6 zones, Glue DB 2 อัน, Athena workgroup
 #   ./infra/ronnai_aws.sh verify     ตรวจว่าครบ + รัน SELECT 1 ใน Athena
-#   ./infra/ronnai_aws.sh deploy     สร้าง/อัปเดต Lambda 5 ตัว (function/) + กฎ EventBridge ให้ต่อกันเอง
+#   ./infra/ronnai_aws.sh deploy     สร้างตาราง trusted (sql/glue_trusted.sql) + สร้าง/อัปเดต Lambda 5 ตัว (function/)
+#                                    + กฎ EventBridge ให้ต่อกันเอง
 #                                    อัปโหลดไฟล์เข้า incoming/ -> check -> ingest -> validate -> transform -> verify
 #   ./infra/ronnai_aws.sh view       สร้างตาราง curated (ถ้ายังไม่มี) + view ตอบ Q1 (sql/views/heat_vs_green.sql)
 #   ./infra/ronnai_aws.sh destroy    ลบทุกอย่าง: Lambda + กฎ EventBridge + workgroup + Glue + bucket
 #                                    (ข้อมูลหายถาวร ต้องพิมพ์ชื่อ bucket ยืนยัน) ชื่อเดิม `teardown` ใช้ได้เหมือนกัน
+#
+#   เลข account/ชื่อ bucket ในไฟล์ SQL (cs341-ronnai-<เลข>) ถูกแทนด้วย bucket ของบัญชีที่ล็อกอินอยู่ให้เองตอนรัน
+#   deploy / view (ไม่ต้องแก้ไฟล์ SQL) ถ้าใช้ชื่อ bucket อื่นให้ตั้ง BUCKET=...
 #
 #   ปรับค่าได้ด้วย env var เช่น:
 #     REGION=us-east-1 BUCKET=my-bucket SCAN_LIMIT_MB=1024 ./infra/ronnai_aws.sh setup
@@ -37,6 +41,7 @@ RUNTIME="${RUNTIME:-python3.12}"
 PY_VERSION="${RUNTIME#python}"
 NAME_PREFIX="${NAME_PREFIX:-ronnai}"
 VIEWS_SQL="${VIEWS_SQL:-sql/views/heat_vs_green.sql}"   # view ตอบ Q1 (path เทียบกับ repo)
+TRUSTED_SQL="${TRUSTED_SQL:-sql/glue_trusted.sql}"      # ตาราง trusted ใน Glue (path เทียบกับ repo)
 PKG_PREFIX="${PKG_PREFIX:-lambda-packages/}"  # ที่เก็บ zip ใน bucket (zip ของ validate เกิน 50 MB ต้องส่งผ่าน S3)
 # ชื่อ Lambda : โฟลเดอร์ใน function/ : timeout (วินาที) : memory (MB) : ชุดไลบรารี (light/heavy)
 FUNCS=(
@@ -349,7 +354,7 @@ build_packages() {
        "$REPO_DIR"/ingestion/pipeline_events.py "$b/"
     cp "$REPO_DIR"/contracts/*.yaml "$b/contracts/"
     cp "$REPO_DIR/gee/communities.csv" "$b/gee/"
-    cp "$REPO_DIR/sql/curated_merge.sql" "$b/sql/"
+    sed -E "s/cs341-ronnai-[0-9]+/$BUCKET/g" "$REPO_DIR/sql/curated_merge.sql" >"$b/sql/curated_merge.sql"   # LOCATION = bucket ของบัญชีนี้
     "$PY" -c 'import shutil, sys; shutil.make_archive(sys.argv[2], "zip", sys.argv[1])' "$b" "$TMP_DIR/zips/$name"
     ok "$NAME_PREFIX-$name  ($(du -sk "$TMP_DIR/zips/$name.zip" | awk '{printf "%.1f", $1/1024}') MB zip)"
   done
@@ -429,9 +434,40 @@ enable_event_chain() {
   put_rule "$NAME_PREFIX-curated-transformed" "$(rule_pattern CuratedTransformed)" verify-batch
 }
 
+create_trusted_tables() {   # CREATE EXTERNAL TABLE + MSCK REPAIR จาก glue_trusted.sql (แทนชื่อ bucket ให้ตรงบัญชี)
+  step "ตาราง trusted (Glue) จาก $TRUSTED_SQL"
+  if [[ ! -f "$REPO_DIR/$TRUSTED_SQL" ]]; then
+    warn "ไม่พบ $TRUSTED_SQL ข้ามขั้นนี้ (ตั้ง TRUSTED_SQL=... ได้) — ต้องสร้างตาราง trusted เองก่อน Lambda จะ MERGE ได้"; return 0
+  fi
+  mkdir -p "$TMP_DIR/trusted"
+  "$PY" -c '
+import re, sys
+from pathlib import Path
+src, out = sys.argv[1:]
+code = "\n".join(l for l in Path(src).read_text(encoding="utf-8").splitlines() if not l.lstrip().startswith("--"))
+n = 0
+for st in code.split(";"):                                           # เอาเฉพาะ CREATE (ตาราง) และ MSCK (โหลด partition) ข้าม SELECT ตรวจผล
+    first = st.strip().split(None, 1)[0].upper() if st.strip() else ""
+    if first in ("CREATE", "MSCK"):
+        n += 1
+        Path(out, f"{n:02d}.sql").write_text(st.strip(), encoding="utf-8")
+print(n)
+' "$REPO_DIR/$TRUSTED_SQL" "$TMP_DIR/trusted" >/dev/null || { warn "แยก SQL ไม่สำเร็จ ข้ามขั้นนี้"; return 0; }
+  local f bad=0 label
+  for f in "$TMP_DIR"/trusted/*.sql; do
+    label="$(tr -s ' \n' ' ' <"$f" | cut -c1-70)"
+    if run_athena_file "$f"; then ok "$label"; else fail "$label"; bad=1; fi
+  done
+  if (( bad )); then
+    warn "สร้างตาราง trusted ไม่สำเร็จบางส่วน (ตรวจ database $DB_TRUSTED, workgroup $WORKGROUP และสิทธิ์ Athena/Glue)"
+  fi
+  warn "ถ้ามีตาราง trusted เดิมที่ไม่มีคอลัมน์ batch_id อยู่แล้ว CREATE ... IF NOT EXISTS จะไม่แก้ให้ ต้อง DROP แล้วรันใหม่"
+}
+
 deploy() {
   preflight
   preflight_deploy
+  create_trusted_tables
   build_packages
   deploy_lambdas
   enable_event_chain
@@ -452,7 +488,7 @@ deploy() {
 # view: ตาราง curated + view ตอบ Q1
 run_athena_file() {   # run_athena_file <ไฟล์ .sql 1 statement>  0 = สำเร็จ
   local qid state reason
-  qid="$(aws_ athena start-query-execution --query-string "$(cat "$1")" --work-group "$WORKGROUP" \
+  qid="$(aws_ athena start-query-execution --query-string "$(sed -E "s/cs341-ronnai-[0-9]+/$BUCKET/g" "$1")" --work-group "$WORKGROUP" \
         --query-execution-context "Database=$DB_CURATED" --query QueryExecutionId --output text)" || return 1
   for _ in $(seq 1 90); do
     state="$(aws_ athena get-query-execution --query-execution-id "$qid" --query QueryExecution.Status.State --output text)"
