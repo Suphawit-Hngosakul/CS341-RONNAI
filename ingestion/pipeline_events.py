@@ -1,6 +1,6 @@
 """ตัวช่วยส่งต่อระหว่าง Lambda ของ pipeline ผ่าน EventBridge (ใช้โดย function/*_function/)
 
-แต่ละ Lambda ทำงานเสร็จแล้วส่ง event เข้า default bus ของ EventBridge  กฎ (rule) ที่ infra/deploy_pipeline.sh สร้างไว้
+แต่ละ Lambda ทำงานเสร็จแล้วส่ง event เข้า default bus ของ EventBridge  กฎ (rule) ที่ infra/ronnai_aws.sh (deploy) สร้างไว้
 จะส่ง event นั้นให้ Lambda ตัวถัดไป:
 
   incoming/<source>_<year>.csv --(S3 Object Created)--> check_batch
