@@ -26,6 +26,7 @@ for p in (HERE, HERE.parents[1] / "ingestion"):
     if p.is_dir():
         sys.path.insert(0, str(p))
 import verify_curated as vc  # noqa: E402
+import pipeline_events as pe  # noqa: E402
 
 TABLE = "community_heat"
 
@@ -39,6 +40,7 @@ def _make_athena():
 def lambda_handler(event, context=None):
     import boto3
 
+    event = pe.payload(event)                                             # รับ event จาก EventBridge (CuratedTransformed)
     bucket, year = event.get("bucket") or os.environ["BUCKET"], int(event["year"])
     curated = os.environ.get("CURATED_PREFIX", "curated/").rstrip("/") + "/"
     raw = os.environ.get("RAW_PREFIX", "raw/").rstrip("/") + "/"
