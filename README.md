@@ -33,6 +33,19 @@ python ingestion\ingest.py --file data\gee_2026\buildings_2026.csv --source buil
 python ingestion\ingest.py --list
 ```
 
+**ขั้นที่ 2: Validation gate raw → trusted / quarantine** (Issue #13) รายละเอียดใน [`ingestion/README.md`](ingestion/README.md#validation-gate-raw--trusted--quarantine-issue-13)
+```powershell
+python ingestion\validate_gate.py --source lst       --latest
+python ingestion\validate_gate.py --source ndvi      --latest
+python ingestion\validate_gate.py --source buildings --latest
+```
+
+**ขั้นที่ 3: ลงทะเบียนตาราง trusted ใน Glue (Issue #14)** รันใน Athena workgroup `ronnai-wg` ทีละบล็อกตาม [`sql/glue_trusted.sql`](sql/glue_trusted.sql) รายละเอียดใน [`sql/README.md`](sql/README.md)
+
+**ขั้นที่ 4: รวมเป็นตาราง curated (Iceberg) + MERGE (Issue #15)** รันใน Athena ทีละบล็อกตาม [`sql/curated_merge.sql`](sql/curated_merge.sql)
+
+> หมายเหตุ: ถ้า Windows Smart App Control บล็อก pandas ให้สร้าง venv ด้วย Python 3.11 (`py -3.11 -m venv .venv`) แล้วรันสคริปต์ด้วย `.\.venv\Scripts\python.exe` แทน `python` เช่น `.\.venv\Scripts\python.exe ingestion\validate_gate.py --source lst --latest`
+
 ## โครงสร้างข้อมูล
 
 | Zone (S3 prefix) | เก็บอะไร |

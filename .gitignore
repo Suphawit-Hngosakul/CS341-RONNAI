@@ -11,6 +11,8 @@ data/
 *.parquet
 *.tif
 *.tiff
+.local_lake/
+logs/
 
 # Python
 __pycache__/
