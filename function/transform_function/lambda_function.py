@@ -1,14 +1,16 @@
 """Lambda 4: transform_batch  trusted (Parquet) -> curated (Iceberg) ด้วย Athena MERGE (sql/curated_merge.sql)
 
   1. ถ้า trusted ของปีนี้ยังไม่ครบทั้ง 3 แหล่ง (lst, ndvi, buildings) -> WAITING_FOR_SOURCES (ยังไม่ MERGE)
-  2. รันบล็อก [1] CREATE TABLE IF NOT EXISTS และบล็อก [2] MERGE INTO ของ sql/curated_merge.sql ผ่าน Athena
+  2. รัน MSCK REPAIR TABLE ของตาราง trusted ทั้ง 3 ตาราง (ลงทะเบียน partition year=… ที่เพิ่งถูกเขียน ไม่งั้น Athena มองไม่เห็นข้อมูลใหม่)
+  3. รันบล็อก [1] CREATE TABLE IF NOT EXISTS และบล็อก [2] MERGE INTO ของ sql/curated_merge.sql ผ่าน Athena
      MERGE รันซ้ำได้ผลเหมือนเดิม (ไม่สร้างแถวซ้ำ) จึงปลอดภัยเมื่อ Step Functions retry หลังล้มเหลวกลางทาง
 
 input  : output ของ validate (status PASSED หรือ PARTIAL)  {"bucket", "source", "year", "batch_id"}
 output : {"status": "TRANSFORMED" | "WAITING_FOR_SOURCES", "missing_sources": [...], "merge_query_id", ...}
 error  : Athena query FAILED/CANCELLED/หมดเวลา -> raise
 
-ตัวแปรสภาพแวดล้อม: BUCKET, ATHENA_WORKGROUP (ronnai-wg), CURATED_DB (ronnai_curated), TRUSTED_PREFIX (trusted/),
+ตัวแปรสภาพแวดล้อม: BUCKET, ATHENA_WORKGROUP (ronnai-wg), CURATED_DB (ronnai_curated), TRUSTED_DB (ronnai_trusted),
+                    TRUSTED_PREFIX (trusted/),
                     ATHENA_TIMEOUT_SEC (ค่าเริ่มต้น 600)
 หมายเหตุ: curated_merge.sql ระบุปีเป็น `year = 2026` ฟังก์ชันนี้แทนค่านั้นด้วยปีของ event
 """
@@ -84,9 +86,12 @@ def lambda_handler(event, context=None):
     workgroup = os.environ.get("ATHENA_WORKGROUP", "ronnai-wg")
     database = os.environ.get("CURATED_DB", "ronnai_curated")
     timeout = int(os.environ.get("ATHENA_TIMEOUT_SEC", "600"))
+    trusted_db = os.environ.get("TRUSTED_DB", "ronnai_trusted")
+    for src in SOURCES:                                                   # ลงทะเบียน partition ใหม่ก่อน MERGE (ตารางต้องมีอยู่แล้ว)
+        _run_athena(athena, f"MSCK REPAIR TABLE {trusted_db}.{src}", workgroup, trusted_db, timeout)
     create_id = _run_athena(athena, blocks[1], workgroup, database, timeout)
     merge_id = _run_athena(athena, blocks[2].replace("year = 2026", f"year = {year}"), workgroup, database, timeout)
     result = {**base, "status": "TRANSFORMED", "missing_sources": [],
-              "create_query_id": create_id, "merge_query_id": merge_id}
+              "repaired_tables": list(SOURCES), "create_query_id": create_id, "merge_query_id": merge_id}
     pe.emit("CuratedTransformed", result)
     return result
