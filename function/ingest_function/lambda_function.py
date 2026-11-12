@@ -23,7 +23,6 @@ for p in (HERE, HERE.parents[1] / "ingestion"):                          # bundl
     if p.is_dir():
         sys.path.insert(0, str(p))
 import ingest  # noqa: E402
-import pipeline_events as pe  # noqa: E402
 
 
 class IngestFunctionError(Exception):
@@ -34,7 +33,6 @@ def lambda_handler(event, context=None):
     import boto3
 
     os.environ.setdefault("LOGNAME", "lambda")                           # build_manifest เรียก getpass.getuser()
-    event = pe.payload(event)                                             # รับ event จาก EventBridge (BatchChecked)
     bucket, key = event["bucket"], event["key"]
     source = ingest.validate_source(event["source"])
     year = ingest.validate_year(int(event["year"]))
@@ -58,7 +56,6 @@ def lambda_handler(event, context=None):
     try:                                                                  # retry ของรอบก่อนที่ทำเสร็จแล้ว
         old = json.loads(s3.get_object(Bucket=bucket, Key=manifest_key)["Body"].read())
         if any(f.get("sha256") == info["sha256"] for f in old.get("files", [])):
-            pe.emit("BatchIngested", result)                              # รอบก่อนอาจส่งต่อไม่สำเร็จ ส่งซ้ำได้ (ขั้นถัดไปรันซ้ำได้)
             return result
         raise IngestFunctionError(f"batch_id {batch_id} มีอยู่แล้วและเป็นไฟล์อื่น (ลองใหม่อีกนาที)")
     except s3.exceptions.NoSuchKey:
@@ -77,5 +74,4 @@ def lambda_handler(event, context=None):
     manifest["ingested_by"] = "lambda:ingest_function"
     s3.put_object(Bucket=bucket, Key=manifest_key, ContentType="application/json",
                   Body=json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8"))
-    pe.emit("BatchIngested", result)
     return result

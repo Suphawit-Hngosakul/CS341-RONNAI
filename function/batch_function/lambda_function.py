@@ -1,11 +1,11 @@
-"""Lambda 1: check_batch  (ขั้นแรก เริ่มเมื่อมีไฟล์ใหม่ใน incoming/ ผ่าน EventBridge)  ไฟล์นี้เคยประมวลผลสำเร็จแล้วหรือยัง
+"""Lambda 1: check_batch  (ขั้นแรกของ state machine เริ่มเมื่อมีไฟล์ใหม่ใน incoming/)  ไฟล์นี้เคยประมวลผลสำเร็จแล้วหรือยัง
 
 หลักการ (Module 05 Part D): ถ้ามี _SUCCESS.json ของ batch ที่ใช้ไฟล์เนื้อหาเดียวกัน -> ALREADY_PROCESSED (หยุด)
   1. อ่านชื่อไฟล์ incoming/<source>_<year>.csv  เช่น incoming/lst_2026.csv  (source ต้องมี contracts/<source>.yaml)
   2. คำนวณ sha256 ของไฟล์
   3. ดู batch เดิมใน raw/source=<source>/ ที่ manifest มี sha256 เดียวกัน และมี _SUCCESS.json อยู่ใน batch นั้น
   4. ซ้ำ -> ย้ายไฟล์ไป quarantine/duplicate/<source>/<ชื่อไฟล์>_<เวลา UTC>/ พร้อม report.json (ลบออกจาก incoming/) แล้วหยุด
-     ใหม่ -> ส่ง event BatchChecked ให้ ingest_batch (ดู ingestion/pipeline_events.py)
+     ใหม่ -> NEW (state machine ไปต่อที่ IngestBatch)
 
 input  : {"bucket": "...", "key": "incoming/lst_2026.csv"}   (หรือ event ของ EventBridge: detail.bucket.name / detail.object.key)
 output : {"status": "NEW" | "ALREADY_PROCESSED" | "REJECTED",
@@ -19,16 +19,11 @@ import hashlib
 import json
 import os
 import re
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE if (HERE / "contracts").is_dir() else HERE.parents[1]       # bundle แบนบน Lambda | โครง repo
-for p in (HERE, HERE.parents[1] / "ingestion"):
-    if p.is_dir():
-        sys.path.insert(0, str(p))
-import pipeline_events as pe  # noqa: E402
 
 NAME_RE = re.compile(r"(?P<source>[a-z][a-z0-9_]*)_(?P<year>\d{4})\.csv")
 
@@ -109,6 +104,4 @@ def lambda_handler(event, context=None):
     if done:
         qkey = _quarantine_duplicate(s3, bucket, key, source, year, sha256, done, qprefix)
         return {**out, "status": "ALREADY_PROCESSED", "processed_batch_id": done, "quarantine_key": qkey}
-    result = {**out, "status": "NEW"}
-    pe.emit("BatchChecked", result)
-    return result
+    return {**out, "status": "NEW"}

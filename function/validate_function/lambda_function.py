@@ -23,13 +23,11 @@ for p in (HERE, HERE.parents[1] / "ingestion"):
     if p.is_dir():
         sys.path.insert(0, str(p))
 import validate_gate as gate  # noqa: E402
-import pipeline_events as pe  # noqa: E402
 
 
 def lambda_handler(event, context=None):
     import boto3
 
-    event = pe.payload(event)                                             # รับ event จาก EventBridge (BatchIngested)
     bucket, source, batch_id = event.get("bucket") or os.environ["BUCKET"], event["source"], event["batch_id"]
     cfg = {"s3": {"bucket": bucket, "prefixes": {}}}
     store = gate.S3Store(boto3.client("s3"), bucket)
@@ -49,8 +47,5 @@ def lambda_handler(event, context=None):
             raise
         prev = store.read(gate.quarantine_prefix(cfg, source, batch_id) + "report.json")
         rep, already = json.loads(prev), True                             # เคยตรวจแล้ว ใช้ผลเดิม
-    result = {**base, "status": rep["status"], "total_rows": rep["total_rows"], "passed": rep["passed"],
-              "quarantined": rep["quarantined"], "already_validated": already}
-    if result["status"] in ("PASSED", "PARTIAL"):                         # BATCH_BLOCKED หยุดที่ quarantine ไม่ส่งต่อ
-        pe.emit("BatchValidated", result)
-    return result
+    return {**base, "status": rep["status"], "total_rows": rep["total_rows"], "passed": rep["passed"],
+            "quarantined": rep["quarantined"], "already_validated": already}

@@ -16,16 +16,11 @@ error  : Athena query FAILED/CANCELLED/หมดเวลา -> raise
 """
 import os
 import re
-import sys
 import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE if (HERE / "sql").is_dir() else HERE.parents[1]
-for p in (HERE, HERE.parents[1] / "ingestion"):
-    if p.is_dir():
-        sys.path.insert(0, str(p))
-import pipeline_events as pe  # noqa: E402
 
 SQL_FILE = ROOT / "sql" / "curated_merge.sql"
 SOURCES = ("lst", "ndvi", "buildings")
@@ -69,7 +64,6 @@ def _run_athena(client, sql, workgroup, database, timeout):
 def lambda_handler(event, context=None):
     import boto3
 
-    event = pe.payload(event)                                             # รับ event จาก EventBridge (BatchValidated)
     bucket = event.get("bucket") or os.environ["BUCKET"]
     year = int(event["year"])
     trusted = os.environ.get("TRUSTED_PREFIX", "trusted/").rstrip("/") + "/"
@@ -91,7 +85,5 @@ def lambda_handler(event, context=None):
         _run_athena(athena, f"MSCK REPAIR TABLE {trusted_db}.{src}", workgroup, trusted_db, timeout)
     create_id = _run_athena(athena, blocks[1], workgroup, database, timeout)
     merge_id = _run_athena(athena, blocks[2].replace("year = 2026", f"year = {year}"), workgroup, database, timeout)
-    result = {**base, "status": "TRANSFORMED", "missing_sources": [],
-              "repaired_tables": list(SOURCES), "create_query_id": create_id, "merge_query_id": merge_id}
-    pe.emit("CuratedTransformed", result)
-    return result
+    return {**base, "status": "TRANSFORMED", "missing_sources": [],
+            "repaired_tables": list(SOURCES), "create_query_id": create_id, "merge_query_id": merge_id}

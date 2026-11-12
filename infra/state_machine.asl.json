@@ -1,0 +1,163 @@
+{
+  "Comment": "RONNAI pipeline (Issue #18): incoming/<source>_<year>.csv -> check -> ingest -> validate -> transform -> verify. ${REGION} ${ACCOUNT_ID} ${NAME_PREFIX} are filled in by infra/ronnai_aws.sh deploy",
+  "StartAt": "CheckBatch",
+  "States": {
+    "CheckBatch": {
+      "Type": "Task",
+      "Comment": "Lambda 1: is this file new? (duplicate -> moved to quarantine/duplicate/)",
+      "Resource": "arn:aws:lambda:${REGION}:${ACCOUNT_ID}:function:${NAME_PREFIX}-check-batch",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "PipelineFailed"}],
+      "Next": "IsNewFile"
+    },
+    "IsNewFile": {
+      "Type": "Choice",
+      "Choices": [
+        {"Variable": "$.status", "StringEquals": "NEW", "Next": "IngestBatch"},
+        {"Variable": "$.status", "StringEquals": "ALREADY_PROCESSED", "Next": "AlreadyProcessed"}
+      ],
+      "Default": "FileRejected"
+    },
+    "AlreadyProcessed": {
+      "Type": "Succeed",
+      "Comment": "Same file content already succeeded before: nothing to do (re-run gives the same result)"
+    },
+    "FileRejected": {
+      "Type": "Fail",
+      "Error": "FileRejected",
+      "Cause": "File name must be incoming/<source>_<year>.csv and contracts/<source>.yaml must exist (see the CheckBatch output)"
+    },
+    "IngestBatch": {
+      "Type": "Task",
+      "Comment": "Lambda 2: incoming/ -> raw/source=<src>/batch_id=<id>/ + manifest.json",
+      "Resource": "arn:aws:lambda:${REGION}:${ACCOUNT_ID}:function:${NAME_PREFIX}-ingest-batch",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        },
+        {
+          "ErrorEquals": ["IngestFunctionError"],
+          "Comment": "batch_id is per minute: wait for the next minute and try once more",
+          "IntervalSeconds": 60,
+          "MaxAttempts": 1
+        }
+      ],
+      "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "PipelineFailed"}],
+      "Next": "ValidateBatch"
+    },
+    "ValidateBatch": {
+      "Type": "Task",
+      "Comment": "Lambda 3: raw/ -> trusted/ (rows that pass) + quarantine/ (rows that fail), per contracts/<source>.yaml",
+      "Resource": "arn:aws:lambda:${REGION}:${ACCOUNT_ID}:function:${NAME_PREFIX}-validate-batch",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "PipelineFailed"}],
+      "Next": "IsValid"
+    },
+    "IsValid": {
+      "Type": "Choice",
+      "Choices": [
+        {"Variable": "$.status", "StringEquals": "PASSED", "Next": "TransformCurated"},
+        {"Variable": "$.status", "StringEquals": "PARTIAL", "Next": "TransformCurated"}
+      ],
+      "Default": "BatchBlocked"
+    },
+    "BatchBlocked": {
+      "Type": "Fail",
+      "Error": "BatchBlocked",
+      "Cause": "File-level problem (missing column, empty or unreadable file): whole batch kept in quarantine/, trusted/ untouched"
+    },
+    "TransformCurated": {
+      "Type": "Task",
+      "Comment": "Lambda 4: trusted (Parquet) -> curated (Iceberg) with Athena MERGE, only when all 3 sources of the year are in trusted",
+      "Resource": "arn:aws:lambda:${REGION}:${ACCOUNT_ID}:function:${NAME_PREFIX}-transform-batch",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        },
+        {
+          "ErrorEquals": ["TransformError"],
+          "Comment": "Athena MERGE is idempotent, so retrying after a failed query is safe",
+          "IntervalSeconds": 15,
+          "MaxAttempts": 2,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "PipelineFailed"}],
+      "Next": "IsTransformed"
+    },
+    "IsTransformed": {
+      "Type": "Choice",
+      "Choices": [
+        {"Variable": "$.status", "StringEquals": "TRANSFORMED", "Next": "VerifyCurated"},
+        {"Variable": "$.status", "StringEquals": "WAITING_FOR_SOURCES", "Next": "WaitingForOtherSources"}
+      ],
+      "Default": "UnexpectedStatus"
+    },
+    "WaitingForOtherSources": {
+      "Type": "Succeed",
+      "Comment": "This source is in trusted/; the execution of the last source to arrive runs transform + verify"
+    },
+    "VerifyCurated": {
+      "Type": "Task",
+      "Comment": "Lambda 5: check curated (row count, unique key, coverage) then write _SUCCESS.json",
+      "Resource": "arn:aws:lambda:${REGION}:${ACCOUNT_ID}:function:${NAME_PREFIX}-verify-batch",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "PipelineFailed"}],
+      "Next": "IsVerified"
+    },
+    "IsVerified": {
+      "Type": "Choice",
+      "Choices": [
+        {"Variable": "$.status", "StringEquals": "SUCCESS", "Next": "PipelineSucceeded"}
+      ],
+      "Default": "VerifyFailed"
+    },
+    "PipelineSucceeded": {
+      "Type": "Succeed",
+      "Comment": "curated/_SUCCESS.json and raw/.../_SUCCESS.json written"
+    },
+    "VerifyFailed": {
+      "Type": "Fail",
+      "Error": "VerifyFailed",
+      "Cause": "curated failed row count / duplicate key / coverage check (see VerifyCurated output: problems)"
+    },
+    "UnexpectedStatus": {
+      "Type": "Fail",
+      "Error": "UnexpectedStatus",
+      "Cause": "TransformCurated returned a status other than TRANSFORMED / WAITING_FOR_SOURCES"
+    },
+    "PipelineFailed": {
+      "Type": "Fail",
+      "Comment": "A Lambda raised after its retries; error and cause come from the failing step",
+      "ErrorPath": "$.error.Error",
+      "CausePath": "$.error.Cause"
+    }
+  }
+}
