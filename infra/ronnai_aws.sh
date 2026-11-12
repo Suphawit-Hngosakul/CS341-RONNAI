@@ -8,6 +8,7 @@
 #   ./infra/ronnai_aws.sh setup      สร้าง S3 bucket + 6 zones, Glue DB 2 อัน, Athena workgroup
 #   ./infra/ronnai_aws.sh verify     ตรวจว่าครบ + รัน SELECT 1 ใน Athena
 #   ./infra/ronnai_aws.sh deploy     สร้างตาราง trusted (sql/glue_trusted.sql) + สร้าง/อัปเดต Lambda 6 ตัว (function/)
+#                                    (validate ใช้ pandas/pyarrow จาก Lambda layer ของ AWS: PANDAS_LAYER_ARN)
 #                                    + state machine ของ Step Functions (infra/state_machine.asl.json)
 #                                    + กฎ EventBridge 1 ข้อ: ไฟล์ใหม่ใน incoming/ -> Lambda start-pipeline -> เริ่ม execution
 #                                    ใน execution: check -> ingest -> validate -> transform -> verify
@@ -50,7 +51,12 @@ SFN_NAME="${SFN_NAME:-}"                      # เว้นว่าง = <NAME
 ASL_FILE="${ASL_FILE:-infra/state_machine.asl.json}"    # นิยาม state machine (path เทียบกับ repo)
 YEAR="${YEAR:-2026}"                          # ใช้กับ run
 RUN_WAIT_SEC="${RUN_WAIT_SEC:-900}"           # run รอ execution จบได้นานสุดกี่วินาที
-PKG_PREFIX="${PKG_PREFIX:-lambda-packages/}"  # ที่เก็บ zip ใน bucket (zip ของ validate เกิน 50 MB ต้องส่งผ่าน S3)
+TRIGGER_WARMUP_SEC="${TRIGGER_WARMUP_SEC:-60}" # all: รอหลังสร้าง trigger ใหม่ก่อนอัปไฟล์ (บัญชีใหม่)
+# Lambda layer สำเร็จรูปของ AWS (AWS SDK for pandas) มี pandas + pyarrow ให้ validate-batch ไม่ต้องแพ็กเอง
+# เลขเวอร์ชันล่าสุดดูที่ https://aws-sdk-pandas.readthedocs.io/en/stable/layers.html
+# ตั้ง PANDAS_LAYER_ARN=none เพื่อแพ็ก pandas + pyarrow เอง (แบบเดิม zip ~64 MB ส่งผ่าน S3)
+PANDAS_LAYER_ARN="${PANDAS_LAYER_ARN:-arn:aws:lambda:${REGION}:336392948345:layer:AWSSDKPandas-Python${PY_VERSION//./}:32}"
+PKG_PREFIX="${PKG_PREFIX:-lambda-packages/}"  # ที่พัก zip ใน bucket ใช้เฉพาะ zip ที่ใหญ่เกิน 45 MB (อัปเข้า Lambda ตรงไม่ได้)
 # ชื่อ Lambda : โฟลเดอร์ใน function/ : timeout (วินาที) : memory (MB) : ชุดไลบรารี (light/heavy)
 FUNCS=(
   "start-pipeline:start_function:30:128:light"

@@ -4,7 +4,7 @@
 
 run_pipeline() {
   preflight
-  local arn dir src f before all new running n waited=0 ex status out states
+  local arn dir src f before all new running n waited=0 ex status out states retried=0
   arn="$(sfn_arn)"
   aws_ stepfunctions describe-state-machine --state-machine-arn "$arn" >/dev/null 2>&1 \
     || die "ไม่พบ state machine $arn — รัน './infra/ronnai_aws.sh deploy' ก่อน"
@@ -16,14 +16,25 @@ run_pipeline() {
     aws_ stepfunctions list-executions --state-machine-arn "$arn" --max-results 100 --no-paginate \
       --query 'executions[].executionArn' --output text | tr -d '\r' | tr '\t' '\n' | grep -v '^None$' | sort || true
   }
+  upload() {   # upload <source...>
+    local s f
+    for s in "$@"; do
+      f="${s}_$YEAR.csv"
+      aws_ s3 cp "$dir/$f" "s3://$BUCKET/incoming/$f" --only-show-errors || die "อัปโหลด $f ไม่ได้"
+      ok "$f"
+    done
+  }
   before="$(list_execs)"
 
+  # บัญชีใหม่: S3 -> EventBridge และกฎที่เพิ่งสร้างต้องใช้เวลาสักพักกว่าจะเริ่มส่ง event
+  # ไฟล์ที่อัปทันทีหลัง deploy จะไม่ถูกส่งต่อ (event หายไปเลย ไม่ใช่มาช้า) จึงรอก่อนอัป
+  if [[ "${TRIGGER_FRESH:-0}" == 1 ]]; then
+    step "รอ ${TRIGGER_WARMUP_SEC} วินาทีให้ trigger ที่เพิ่งสร้างเริ่มทำงาน"
+    sleep "$TRIGGER_WARMUP_SEC"
+  fi
+
   step "อัปโหลดเข้า s3://$BUCKET/incoming/ (ปี $YEAR)"
-  for src in lst ndvi buildings; do
-    f="${src}_$YEAR.csv"
-    aws_ s3 cp "$dir/$f" "s3://$BUCKET/incoming/$f" --only-show-errors || die "อัปโหลด $f ไม่ได้"
-    ok "$f"
-  done
+  upload lst ndvi buildings
 
   step "รอ execution ทั้ง 3 จบ (สูงสุด $RUN_WAIT_SEC วินาที)"
   while :; do
@@ -36,9 +47,18 @@ run_pipeline() {
     done
     printf '  ... %3ss  เริ่มแล้ว %s/3  กำลังรัน %s\n' "$waited" "$n" "$running"
     (( n >= 3 && running == 0 )) && break
-    if (( n == 0 && waited >= 60 )); then
-      warn "ผ่านไป ${waited} วินาทียังไม่มี execution เริ่มเลย ดู log ของตัวเริ่ม:"
-      warn "  aws logs tail /aws/lambda/$NAME_PREFIX-start-pipeline --since 10m"
+    if (( n < 3 && waited == 60 && !retried )); then              # event ของบางไฟล์หาย: อัปไฟล์นั้นซ้ำ 1 ครั้ง
+      retried=1
+      local missing=()
+      for src in lst ndvi buildings; do
+        grep -q ":${src}_$YEAR-csv-" <<<"$new" || missing+=("$src")
+      done
+      if (( ${#missing[@]} )); then
+        warn "ผ่านไป 60 วินาที execution ของ ${missing[*]} ยังไม่เริ่ม (event อาจหายเพราะ trigger เพิ่งสร้าง) อัปโหลดซ้ำ"
+        upload "${missing[@]}"
+      fi
+    elif (( n == 0 && waited == 150 )); then
+      warn "ยังไม่มี execution เริ่มเลย ดู log ของตัวเริ่ม: aws logs tail /aws/lambda/$NAME_PREFIX-start-pipeline --since 10m"
     fi
     (( waited >= RUN_WAIT_SEC )) && { warn "รอเกิน $RUN_WAIT_SEC วินาที ดูต่อที่ Step Functions console"; break; }
     sleep 10; waited=$((waited + 10))

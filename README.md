@@ -68,7 +68,7 @@ python ingestion\validate_gate.py --source lst --latest                         
 | `curated/` | ตารางพร้อมใช้ (Apache Iceberg) + `_SUCCESS.json` |
 | `quarantine/` | แถว/batch ที่ไม่ผ่าน พร้อม report และไฟล์ซ้ำใน `quarantine/duplicate/` (ไม่ลบ) |
 | `athena-results/` | ผลลัพธ์ query ของ Athena (ลบอัตโนมัติหลัง 7 วัน) |
-| `lambda-packages/` | zip ของ Lambda ที่ `deploy` อัปขึ้นไป |
+| `lambda-packages/` | ที่พัก zip ของ Lambda เฉพาะกรณีไม่ใช้ layer และ zip ใหญ่เกิน 45 MB (ปกติว่าง) |
 
 ## โครงสร้าง folder
 

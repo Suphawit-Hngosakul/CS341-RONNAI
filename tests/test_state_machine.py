@@ -86,3 +86,15 @@ def test_start_function_execution_name():
     name = m.execution_name("incoming/lst_2026.csv", "0b1c2d3e-aaaa-bbbb-cccc-1234567890ab")
     assert name == "lst_2026-csv-0b1c2d3e-aaaa-bbbb-cccc-1234567890ab"
     assert len(m.execution_name("incoming/" + "x" * 200 + ".csv", "e" * 36)) <= 80
+
+
+def test_start_function_ignores_folder_marker():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("start_fn2", ROOT / "function" / "start_function" / "lambda_function.py")
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    assert not m.should_start("incoming/")                               # object โฟลเดอร์ที่ setup สร้าง
+    assert not m.should_start("incoming/readme.txt")
+    assert m.should_start("incoming/lst_2026.csv")
+    out = m.lambda_handler({"id": "x", "detail": {"bucket": {"name": "b"}, "object": {"key": "incoming/"}}})
+    assert out["status"] == "IGNORED"                                    # ไม่เรียก Step Functions เลย

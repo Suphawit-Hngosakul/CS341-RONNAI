@@ -5,7 +5,8 @@
 แล้ว Lambda นี้ (รันด้วย LabRole) เรียก states:StartExecution ให้แทน
 
 input  : event ของ EventBridge (S3 Object Created)  detail.bucket.name / detail.object.key
-output : {"status": "STARTED" | "ALREADY_STARTED", "execution_arn" | "execution_name", "bucket", "key"}
+output : {"status": "STARTED" | "ALREADY_STARTED" | "IGNORED", "execution_arn" | "execution_name", "bucket", "key"}
+  IGNORED: key ไม่ใช่ไฟล์ .csv เช่น "incoming/" (object โฟลเดอร์ที่ setup สร้าง) ไม่เริ่ม execution
   ส่ง event ทั้งก้อนเป็น input ของ execution (CheckBatch อ่าน detail.bucket.name / detail.object.key เอง)
   ชื่อ execution = <ชื่อไฟล์>-<event id>  EventBridge ส่ง event เดิมซ้ำ -> ชื่อเดิม -> ไม่เกิด execution ซ้ำ
 
@@ -22,14 +23,21 @@ def execution_name(key, event_id):
     return f"{stem}-{event_id}"[:80]
 
 
+def should_start(key):
+    """เริ่ม execution เฉพาะไฟล์ .csv (ข้าม object โฟลเดอร์ "incoming/" และไฟล์อื่น)"""
+    return key.lower().endswith(".csv")
+
+
 def lambda_handler(event, context=None):
     import boto3
 
     detail = event.get("detail") or {}
     bucket, key = detail["bucket"]["name"], detail["object"]["key"]
     name = execution_name(key, event.get("id") or str(uuid.uuid4()))
-    sfn = boto3.client("stepfunctions")
     base = {"bucket": bucket, "key": key}
+    if not should_start(key):
+        return {**base, "status": "IGNORED"}
+    sfn = boto3.client("stepfunctions")
     try:
         resp = sfn.start_execution(stateMachineArn=os.environ["STATE_MACHINE_ARN"], name=name,
                                    input=json.dumps(event, ensure_ascii=False, default=str))

@@ -28,8 +28,22 @@ trim_deps() {     # ตัดของที่ Lambda ไม่ใช้ ให
   find "$1" \( -name '*.pyi' -o -name '*.pyx' -o -name '*.pxd' -o -name '*.pxi' -o -name '*.a' \) -delete 2>/dev/null || true
 }
 
+resolve_pandas_layer() {   # LAYER = ARN ของ layer pandas ถ้าใช้ได้ ไม่งั้นว่าง (แพ็ก pandas เอง)
+  LAYER=""
+  if [[ "$PANDAS_LAYER_ARN" == none ]]; then
+    skip "ไม่ใช้ layer (PANDAS_LAYER_ARN=none) แพ็ก pandas + pyarrow เอง"; return 0
+  fi
+  if aws_ lambda get-layer-version-by-arn --arn "$PANDAS_LAYER_ARN" >/dev/null 2>&1; then
+    LAYER="$PANDAS_LAYER_ARN"
+    ok "ใช้ layer ${LAYER#*:layer:} (pandas + pyarrow) ให้ validate-batch"
+  else
+    warn "ใช้ layer $PANDAS_LAYER_ARN ไม่ได้ (ไม่มีเวอร์ชันนี้หรือไม่มีสิทธิ์) จะแพ็ก pandas + pyarrow เองแทน"
+  fi
+}
+
 build_packages() {
   step "แพ็กเกจ Lambda"
+  resolve_pandas_layer
   [[ -d "$REPO_DIR/function" && -d "$REPO_DIR/ingestion" && -d "$REPO_DIR/contracts" ]] \
     || die "ไม่พบโฟลเดอร์ function/ ingestion/ contracts/ ใน $REPO_DIR (ต้องรันจาก repo)"
   local f
@@ -40,12 +54,15 @@ build_packages() {
   mkdir -p "$TMP_DIR/light" "$TMP_DIR/heavy" "$TMP_DIR/zips"
   pip_install "$TMP_DIR/light" pyyaml
   ok "ติดตั้ง pyyaml (ชุดเบา)"
-  pip_install "$TMP_DIR/heavy" pandas pyarrow pyyaml
-  trim_deps "$TMP_DIR/heavy"
-  ok "ติดตั้ง pandas, pyarrow, pyyaml (ชุดของ validate) ขนาด $(du -sm "$TMP_DIR/heavy" | cut -f1) MB"
+  if [[ -z "$LAYER" ]]; then
+    pip_install "$TMP_DIR/heavy" pandas pyarrow pyyaml
+    trim_deps "$TMP_DIR/heavy"
+    ok "ติดตั้ง pandas, pyarrow, pyyaml (ชุดของ validate) ขนาด $(du -sm "$TMP_DIR/heavy" | cut -f1) MB"
+  fi
   local spec name dir to mem kind b
   for spec in "${FUNCS[@]}"; do
     IFS=: read -r name dir to mem kind <<<"$spec"
+    [[ "$kind" == heavy && -n "$LAYER" ]] && kind=light                  # pandas มาจาก layer แล้ว
     [[ -f "$REPO_DIR/function/$dir/lambda_function.py" ]] || die "ไม่พบ function/$dir/lambda_function.py"
     b="$TMP_DIR/bundle-$name"
     mkdir -p "$b/contracts" "$b/gee" "$b/sql"
@@ -62,25 +79,33 @@ build_packages() {
 
 deploy_lambdas() {
   step "Lambda 6 ตัว (start-pipeline + 5 ขั้นของ state machine)"
-  local spec name dir to mem kind fn key envs
+  local spec name dir to mem kind fn key envs zip
+  local -a code_new code_upd layers
   envs="Variables={BUCKET=$BUCKET,ATHENA_WORKGROUP=$WORKGROUP,CURATED_DB=$DB_CURATED,TRUSTED_DB=$DB_TRUSTED,STATE_MACHINE_ARN=$(sfn_arn)}"
   for spec in "${FUNCS[@]}"; do
     IFS=: read -r name dir to mem kind <<<"$spec"
     fn="$NAME_PREFIX-$name"
-    key="${PKG_PREFIX}${fn}.zip"
-    aws_ s3 cp "$TMP_DIR/zips/$name.zip" "s3://$BUCKET/$key" --only-show-errors \
-      || die "อัปโหลด $fn.zip ไป s3://$BUCKET/$key ไม่ได้"
+    zip="$TMP_DIR/zips/$name.zip"
+    layers=()
+    [[ "$kind" == heavy && -n "$LAYER" ]] && layers=(--layers "$LAYER")
+    if (( $(du -k "$zip" | cut -f1) < 45 * 1024 )); then                   # อัปเข้า Lambda ตรงได้ (ลิมิต 50 MB)
+      code_new=(--zip-file "fileb://$zip"); code_upd=(--zip-file "fileb://$zip")
+    else                                                                  # ใหญ่เกิน: พักไว้ใน S3 ก่อน
+      key="${PKG_PREFIX}${fn}.zip"
+      aws_ s3 cp "$zip" "s3://$BUCKET/$key" --only-show-errors || die "อัปโหลด $fn.zip ไป s3://$BUCKET/$key ไม่ได้"
+      code_new=(--code "S3Bucket=$BUCKET,S3Key=$key"); code_upd=(--s3-bucket "$BUCKET" --s3-key "$key")
+    fi
     if aws_ lambda get-function --function-name "$fn" >/dev/null 2>&1; then
-      aws_ lambda update-function-code --function-name "$fn" --s3-bucket "$BUCKET" --s3-key "$key" >/dev/null
+      aws_ lambda update-function-code --function-name "$fn" "${code_upd[@]}" >/dev/null
       aws_ lambda wait function-updated --function-name "$fn"
       aws_ lambda update-function-configuration --function-name "$fn" --role "$ROLE_ARN" \
         --handler lambda_function.lambda_handler --runtime "$RUNTIME" --timeout "$to" --memory-size "$mem" \
-        --environment "$envs" >/dev/null
+        --environment "$envs" ${layers[@]+"${layers[@]}"} >/dev/null
       aws_ lambda wait function-updated --function-name "$fn"
       ok "อัปเดต $fn"
     else
       aws_ lambda create-function --function-name "$fn" --runtime "$RUNTIME" --role "$ROLE_ARN" \
-        --handler lambda_function.lambda_handler --code "S3Bucket=$BUCKET,S3Key=$key" \
+        --handler lambda_function.lambda_handler "${code_new[@]}" ${layers[@]+"${layers[@]}"} \
         --timeout "$to" --memory-size "$mem" --architectures x86_64 --environment "$envs" >/dev/null \
         || die "สร้าง $fn ไม่ได้ (ตรวจ role $ROLE_ARN และสิทธิ์ Lambda)"
       aws_ lambda wait function-active --function-name "$fn"
@@ -112,6 +137,7 @@ deploy_state_machine() {
 enable_trigger() {
   step "EventBridge: ไฟล์ใหม่ใน incoming/ -> เริ่ม execution ของ state machine"
   local cur compact rule="$NAME_PREFIX-incoming-csv" r
+  TRIGGER_FRESH=0          # 1 = เพิ่งเปิด notification / สร้างกฎใหม่ (AWS ต้องใช้เวลาสักพักกว่า event จะเริ่มไหล)
   cur="$(aws_ s3api get-bucket-notification-configuration --bucket "$BUCKET" --output json 2>/dev/null || true)"
   compact="${cur//[[:space:]]/}"
   if grep -q 'EventBridgeConfiguration' <<<"$cur"; then
@@ -121,11 +147,13 @@ enable_trigger() {
       --notification-configuration '{"EventBridgeConfiguration": {}}' >/dev/null \
       || die "เปิด EventBridge notification ของ bucket ไม่ได้"
     ok "เปิดการส่ง event ของ bucket ไป EventBridge"
+    TRIGGER_FRESH=1
   else
     die "bucket มี notification (Lambda/SNS/SQS) ตั้งไว้แล้ว การตั้งใหม่จะเขียนทับของเดิม จึงหยุดไว้ก่อน — เปิด EventBridge เองที่ S3 > bucket > Properties แล้วรันใหม่"
   fi
   printf '%s' "{\"source\": [\"aws.s3\"], \"detail-type\": [\"Object Created\"], \"detail\": {\"bucket\": {\"name\": [\"$BUCKET\"]}, \"object\": {\"key\": [{\"prefix\": \"incoming/\"}]}}}" \
     >"$TMP_DIR/pattern.json"
+  aws_ events describe-rule --name "$rule" >/dev/null 2>&1 || TRIGGER_FRESH=1
   aws_ events put-rule --name "$rule" --event-pattern "file://$TMP_DIR/pattern.json" --state ENABLED >/dev/null \
     || die "สร้างกฎ $rule ไม่ได้"
   # EventBridge -> Step Functions ตรง ๆ ต้องใช้ RoleArn ที่ LabRole ไม่ยอม (execution ไม่เริ่มเลย ไม่มี error)

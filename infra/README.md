@@ -44,12 +44,18 @@
 | Athena workgroup | `ronnai-wg` | setup | จำกัดสแกน 1 GB ต่อ query, engine v3 (Iceberg) |
 | Glue table | `ronnai_trusted.{lst,ndvi,buildings}` | deploy | จาก `sql/glue_trusted.sql` |
 | Lambda | `ronnai-start-pipeline` | deploy | รับ event จาก EventBridge แล้วเรียก `StartExecution` |
-| Lambda | `ronnai-{check,ingest,validate,transform,verify}-batch` | deploy | 5 ขั้นของ state machine (validate ใช้ pandas/pyarrow, memory 2 GB) |
+| Lambda | `ronnai-{check,ingest,validate,transform,verify}-batch` | deploy | 5 ขั้นของ state machine (validate memory 2 GB) |
+| Lambda layer | `AWSSDKPandas-Python312` (ของ AWS ไม่ได้สร้างใหม่) | deploy | แนบให้ `validate-batch` ได้ pandas + pyarrow โดยไม่ต้องแพ็กเอง |
 | Step Functions | `ronnai-pipeline` | deploy | นิยามใน `state_machine.asl.json` (STANDARD) |
 | EventBridge rule | `ronnai-incoming-csv` | deploy | S3 Object Created ใต้ `incoming/` -> `ronnai-start-pipeline` |
 | Glue table / view | `ronnai_curated.community_heat` + view Q1 | view | จาก `sql/curated_merge.sql` บล็อก [1] และ `sql/views/heat_vs_green.sql` |
 
 ไม่มีการสร้าง IAM role ทุกอย่างใช้ `LabRole` ของ lab
+
+**ทำไมใช้ Lambda layer:** pandas + pyarrow ใหญ่ ~210 MB ถ้าแพ็กเอง zip ของ validate จะ ~64 MB เกินลิมิต 50 MB ที่อัปเข้า Lambda ตรงได้ ต้องพักไว้ใน S3 (`lambda-packages/`) และ deploy ช้าเพราะต้องดาวน์โหลด pandas ทุกครั้ง
+ใช้ layer สำเร็จรูปของ AWS แทน ทำให้ zip ทุกตัวเหลือ < 1 MB อัปตรงได้ deploy เร็วขึ้น และเปิดดูโค้ดใน Lambda console ได้
+ถ้าใช้ layer ไม่ได้ (เช่นเลขเวอร์ชันถูกถอนออก) สคริปต์จะเตือนแล้วกลับไปแพ็ก pandas เองผ่าน S3 ให้อัตโนมัติ
+เปลี่ยนเวอร์ชันได้ด้วย `PANDAS_LAYER_ARN=...` (ดูเลขล่าสุดที่ https://aws-sdk-pandas.readthedocs.io/en/stable/layers.html) หรือ `PANDAS_LAYER_ARN=none` เพื่อแพ็กเอง
 
 **ทำไมต้องมี `ronnai-start-pipeline` คั่น:** กฎ EventBridge ที่ยิงเข้า Step Functions ตรง ๆ ต้องให้ EventBridge assume role ซึ่ง `LabRole` ไม่อนุญาต (execution จะไม่เริ่มเลยโดยไม่มี error) ส่วน EventBridge -> Lambda ใช้แค่ resource policy ของ Lambda จึงทำได้
 
@@ -76,7 +82,7 @@
 YEAR=2026 RUN_WAIT_SEC=900 ./infra/ronnai_aws.sh run
 BUCKET=cs341-ronnai-team SCAN_LIMIT_MB=512 ./infra/ronnai_aws.sh setup
 ```
-ตัวแปรทั้งหมด (ค่าเริ่มต้น): `REGION` (us-east-1), `BUCKET` (cs341-ronnai-<account>), `WORKGROUP` (ronnai-wg), `DB_TRUSTED`, `DB_CURATED`, `SCAN_LIMIT_MB` (1024), `ROLE_ARN` (LabRole), `NAME_PREFIX` (ronnai), `SFN_NAME` (<NAME_PREFIX>-pipeline), `YEAR` (2026), `RUN_WAIT_SEC` (900), `AWS_PROFILE_NAME`
+ตัวแปรทั้งหมด (ค่าเริ่มต้น): `REGION` (us-east-1), `BUCKET` (cs341-ronnai-<account>), `WORKGROUP` (ronnai-wg), `DB_TRUSTED`, `DB_CURATED`, `SCAN_LIMIT_MB` (1024), `ROLE_ARN` (LabRole), `NAME_PREFIX` (ronnai), `SFN_NAME` (<NAME_PREFIX>-pipeline), `YEAR` (2026), `RUN_WAIT_SEC` (900), `TRIGGER_WARMUP_SEC` (60), `PANDAS_LAYER_ARN` (AWSSDKPandas-Python312:32, `none` = แพ็กเอง), `AWS_PROFILE_NAME`
 
 ## โครงไฟล์
 
@@ -106,8 +112,10 @@ Learner Lab ของแต่ละคนเป็น AWS account แยกก�
 | รันแล้วไม่มีอะไรขึ้นเลย | รันจาก PowerShell อยู่ ให้รันใน Git Bash (ดูตาราง "ใช้ที่ไหนได้บ้าง") |
 | `ExpiredToken` / `credentials ใช้ไม่ได้` | session lab หมดอายุ กด Start Lab แล้วคัดลอก credentials ใหม่ |
 | `Unable to load paramfile file:///tmp/...` | สคริปต์เวอร์ชันเก่า อัปเดต `infra/` ให้ล่าสุด (แก้เรื่อง path ของ Git Bash แล้ว) |
-| `run` ค้างที่ `เริ่มแล้ว 0/3` | ดู `aws logs tail /aws/lambda/ronnai-start-pipeline --since 10m` และเช็กว่ารัน `deploy` แล้ว |
-| `ERROR: pip's dependency resolver ... python-dateutil` ตอนแพ็ก Lambda | เป็นคำเตือนจาก pip ในเครื่อง ไม่กระทบ zip ของ Lambda ข้ามได้ |
+| `run` ค้างที่ `เริ่มแล้ว 0/3` ในบัญชีใหม่ | trigger ที่เพิ่งสร้างยังไม่ส่ง event (ไฟล์ที่อัปช่วงนั้นหายไปเลย) สคริปต์รอ `TRIGGER_WARMUP_SEC` (60) ก่อนอัป และถ้า 60 วินาทียังไม่เริ่มจะอัปไฟล์นั้นซ้ำให้เอง ถ้ายังไม่ได้ ดู `aws logs tail /aws/lambda/ronnai-start-pipeline --since 10m` |
+| มี execution `FileRejected` ที่ key = `incoming/` | object โฟลเดอร์ที่ `setup` สร้าง ไปเรียก trigger (สคริปต์เวอร์ชันเก่า) เวอร์ชันนี้ `start-pipeline` ข้ามไฟล์ที่ไม่ใช่ `.csv` แล้ว |
+| `ERROR: pip's dependency resolver ... python-dateutil` ตอนแพ็ก Lambda | เกิดเฉพาะตอนแพ็ก pandas เอง เป็นคำเตือนจาก pip ในเครื่อง ไม่กระทบ zip ของ Lambda ข้ามได้ |
+| `[WARN] ใช้ layer ... ไม่ได้` | สคริปต์แพ็ก pandas เองแทนแล้ว ใช้งานได้ปกติ ถ้าอยากใช้ layer ให้ตั้ง `PANDAS_LAYER_ARN` เป็นเลขเวอร์ชันล่าสุด |
 | `ไม่พบ state machine ... รัน deploy ก่อน` | รัน `./infra/ronnai_aws.sh deploy` (หรือ `all`) |
 | `[WARN] ตั้ง public access block / lifecycle ไม่ได้` | Learner Lab บางรุ่นไม่ให้สิทธิ์ ข้ามได้ |
 | `Bytes scanned limit was exceeded` | query สแกนเกิน limit ให้กรองให้แคบลง หรือ `SCAN_LIMIT_MB=...` แล้วรัน `setup` ใหม่ |
