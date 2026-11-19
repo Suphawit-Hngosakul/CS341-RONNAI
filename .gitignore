@@ -26,3 +26,6 @@ venv/
 Thumbs.db
 .vscode/
 .idea/
+
+# ไฟล์ที่ Claude สร้างให้ (ไม่ขึ้น repo)
+Claudeoutput/
