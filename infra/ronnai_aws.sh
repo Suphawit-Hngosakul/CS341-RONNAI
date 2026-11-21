@@ -14,7 +14,7 @@
 #                                    ใน execution: check -> ingest -> validate -> transform -> verify
 #   ./infra/ronnai_aws.sh run        (Issue #18) อัปโหลด data/gee_<YEAR>/ ทั้ง 3 แหล่งเข้า incoming/ แล้วรอดูผลทีละขั้น
 #                                    YEAR=2026 เป็นค่าเริ่มต้น  รันซ้ำได้: ไฟล์เดิมจะจบที่ AlreadyProcessed
-#   ./infra/ronnai_aws.sh view       สร้างตาราง curated (ถ้ายังไม่มี) + view ตอบ Q1 (sql/views/heat_vs_green.sql)
+#   ./infra/ronnai_aws.sh view       สร้างตาราง curated (ถ้ายังไม่มี) + view curated_* (sql/views/heat_vs_green.sql)
 #   ./infra/ronnai_aws.sh destroy    ลบทุกอย่าง: state machine + Lambda + กฎ EventBridge + workgroup + Glue + bucket
 #                                    (ข้อมูลหายถาวร ต้องพิมพ์ชื่อ bucket ยืนยัน) ชื่อเดิม `teardown` ใช้ได้เหมือนกัน
 #
@@ -45,7 +45,7 @@ ROLE_ARN="${ROLE_ARN:-}"                      # เว้นว่าง = arn:a
 RUNTIME="${RUNTIME:-python3.12}"
 PY_VERSION="${RUNTIME#python}"
 NAME_PREFIX="${NAME_PREFIX:-ronnai}"
-VIEWS_SQL="${VIEWS_SQL:-sql/views/heat_vs_green.sql}"   # view ตอบ Q1 (path เทียบกับ repo)
+VIEWS_SQL="${VIEWS_SQL:-sql/views/heat_vs_green.sql}"   # view curated_* (path เทียบกับ repo)
 TRUSTED_SQL="${TRUSTED_SQL:-sql/glue_trusted.sql}"      # ตาราง trusted ใน Glue (path เทียบกับ repo)
 SFN_NAME="${SFN_NAME:-}"                      # เว้นว่าง = <NAME_PREFIX>-pipeline
 ASL_FILE="${ASL_FILE:-infra/state_machine.asl.json}"    # นิยาม state machine (path เทียบกับ repo)

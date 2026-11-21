@@ -11,7 +11,7 @@
 | `setup` | S3 bucket + 6 zones, Glue DB 2 อัน, Athena workgroup, `config/settings.yaml` |
 | `verify` | ตรวจว่าของจาก `setup` ครบ + รัน `SELECT 1` ใน Athena |
 | `deploy` | ตาราง trusted ใน Glue, Lambda 6 ตัว, state machine `ronnai-pipeline`, กฎ EventBridge (ไฟล์ใหม่ใน `incoming/` -> เริ่ม execution) |
-| `view` | ตาราง curated (ถ้ายังไม่มี) + view ตอบ Q1 จาก `sql/views/heat_vs_green.sql` |
+| `view` | ตาราง curated (ถ้ายังไม่มี) + view curated_* จาก `sql/views/heat_vs_green.sql` |
 | `run` | อัปโหลด `data/gee_<YEAR>/` ทั้ง 3 แหล่งเข้า `incoming/` รอ execution จบ แล้วสรุปขั้นที่แต่ละ execution ผ่าน |
 | `all` | `setup` -> `deploy` -> `view` -> `run` |
 | `destroy` | ลบทุกอย่าง (กฎ EventBridge, state machine, Lambda, workgroup, Glue, bucket) ต้องพิมพ์ชื่อ bucket ยืนยัน **ข้อมูลหายถาวร** (ชื่อเดิม `teardown` ใช้ได้) |
@@ -48,7 +48,7 @@
 | Lambda layer | `AWSSDKPandas-Python312` (ของ AWS ไม่ได้สร้างใหม่) | deploy | แนบให้ `validate-batch` ได้ pandas + pyarrow โดยไม่ต้องแพ็กเอง |
 | Step Functions | `ronnai-pipeline` | deploy | นิยามใน `state_machine.asl.json` (STANDARD) |
 | EventBridge rule | `ronnai-incoming-csv` | deploy | S3 Object Created ใต้ `incoming/` -> `ronnai-start-pipeline` |
-| Glue table / view | `ronnai_curated.community_heat` + view Q1 | view | จาก `sql/curated_merge.sql` บล็อก [1] และ `sql/views/heat_vs_green.sql` |
+| Glue table / view | `ronnai_curated.community_heat` + view curated_* | view | จาก `sql/curated_merge.sql` บล็อก [1] และ `sql/views/heat_vs_green.sql` |
 
 ไม่มีการสร้าง IAM role ทุกอย่างใช้ `LabRole` ของ lab
 

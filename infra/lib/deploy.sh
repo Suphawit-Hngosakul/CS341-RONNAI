@@ -205,7 +205,7 @@ deploy() {
   printf '%s\n' \
     "  Flow อัตโนมัติ: incoming/<source>_<year>.csv -> Step Functions $(sfn_arn)" \
     "                  CheckBatch -> IngestBatch -> ValidateBatch -> TransformCurated -> VerifyCurated" \
-    "  ต่อด้วย: ./infra/ronnai_aws.sh view   (สร้างตาราง curated + view ตอบ Q1)" \
+    "  ต่อด้วย: ./infra/ronnai_aws.sh view   (สร้างตาราง curated + view curated_*)" \
     "  รันทั้ง pipeline: ./infra/ronnai_aws.sh run   (อัปโหลด data/gee_$YEAR/ ทั้ง 3 แหล่ง แล้วรอดูผลแต่ละขั้น)" \
     "  ไฟล์ซ้ำ (เคยสำเร็จแล้ว) จะถูกย้ายไป s3://$BUCKET/quarantine/duplicate/ และ execution จบที่ AlreadyProcessed" \
     "  ดูทีละขั้น: Step Functions console > $NAME_PREFIX-pipeline > execution > Graph view" \
