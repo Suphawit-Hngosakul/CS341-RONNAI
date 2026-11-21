@@ -12,7 +12,7 @@ import boto3
 import pytest
 from moto import mock_aws
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "ingestion"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "jobs"))
 import ingest  # noqa: E402
 
 BUCKET = "cs341-ronnai-test"

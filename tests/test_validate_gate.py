@@ -17,7 +17,7 @@ import pytest
 from moto import mock_aws
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT / "ingestion"))
+sys.path.insert(0, str(ROOT / "jobs"))
 import ingest  # noqa: E402
 import validate_gate as gate  # noqa: E402
 

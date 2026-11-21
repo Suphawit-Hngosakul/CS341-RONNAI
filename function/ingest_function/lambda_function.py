@@ -19,7 +19,7 @@ from datetime import datetime
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-for p in (HERE, HERE.parents[1] / "ingestion"):                          # bundle แบน | โครง repo
+for p in (HERE, HERE.parents[1] / "jobs"):                          # bundle แบน | โครง repo
     if p.is_dir():
         sys.path.insert(0, str(p))
 import ingest  # noqa: E402

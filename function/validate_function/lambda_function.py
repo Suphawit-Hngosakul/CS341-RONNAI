@@ -19,7 +19,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE if (HERE / "contracts").is_dir() else HERE.parents[1]
-for p in (HERE, HERE.parents[1] / "ingestion"):
+for p in (HERE, HERE.parents[1] / "jobs"):
     if p.is_dir():
         sys.path.insert(0, str(p))
 import validate_gate as gate  # noqa: E402

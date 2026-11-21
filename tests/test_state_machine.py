@@ -68,7 +68,7 @@ def test_tasks_retry_and_catch():
 
 def test_choice_values_are_real_lambda_statuses():
     src = "".join(p.read_text(encoding="utf-8") for p in (ROOT / "function").glob("*/lambda_function.py"))
-    src += (ROOT / "ingestion" / "validate_gate.py").read_text(encoding="utf-8")   # PASSED/PARTIAL มาจาก gate
+    src += (ROOT / "jobs" / "validate_gate.py").read_text(encoding="utf-8")   # PASSED/PARTIAL มาจาก gate
     for name, st in load()["States"].items():
         for c in st.get("Choices", []):
             assert f'"{c["StringEquals"]}"' in src, f"{name}: ไม่มี Lambda ไหนคืน status {c['StringEquals']}"
