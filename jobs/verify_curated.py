@@ -128,6 +128,16 @@ def run_checks(athena, table, year, expected, min_coverage):
     out.update(complete_rows=complete, coverage_pct=cov, min_coverage_pct=min_coverage)
     if cov < min_coverage:
         problems.append(f"coverage = {cov}% (ต้อง >= {min_coverage}%)  ครบ {complete}/{total} แถว")
+
+    # 4) null รายคอลัมน์ (แสดงว่าขาดตรงไหน ใช้ดูอย่างเดียว ไม่มีผลต่อผ่าน/ไม่ผ่าน)
+    cols = spec["complete"]
+    sel = ", ".join(f"sum(CASE WHEN {c} IS NULL THEN 1 ELSE 0 END) AS {c}" for c in cols)
+    r = athena.query(f"SELECT {sel} FROM {tbl} {where}")[0]
+    out["null_counts"] = {c: int(r[c] or 0) for c in cols}
+    out["incomplete_keys"] = []
+    if complete < total:
+        out["incomplete_keys"] = athena.query(
+            f"SELECT {keys} FROM {tbl} {where} AND NOT ({cond}) ORDER BY {keys} LIMIT 20")
     return out, problems
 
 
@@ -182,6 +192,11 @@ def main(argv=None, athena_factory=None):
         print(f"  row count  : {result['row_count']} (คาด {expected})")
         print(f"  key ซ้ำ    : {result['duplicate_keys']} ชุด")
         print(f"  coverage   : {result['coverage_pct']}%  (ครบ {result['complete_rows']} แถว)")
+        nulls = {k: v for k, v in result["null_counts"].items() if v}
+        print("  null       : " + (", ".join(f"{k}={v}" for k, v in nulls.items()) if nulls else "ไม่มี"))
+        if result["incomplete_keys"]:
+            print("  แถวที่มี null (สูงสุด 20): " + ", ".join(
+                "/".join(str(v) for v in k.values()) for k in result["incomplete_keys"]))
 
         s3 = (session or make_session(cfg)).client("s3")
         if problems:

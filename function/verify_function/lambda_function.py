@@ -22,7 +22,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE if (HERE / "gee").is_dir() else HERE.parents[1]
-for p in (HERE, HERE.parents[1] / "ingestion"):
+for p in (HERE, HERE.parents[1] / "jobs"):
     if p.is_dir():
         sys.path.insert(0, str(p))
 import verify_curated as vc  # noqa: E402

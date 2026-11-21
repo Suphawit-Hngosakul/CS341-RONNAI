@@ -44,11 +44,11 @@ resolve_pandas_layer() {   # LAYER = ARN ของ layer pandas ถ้าใช�
 build_packages() {
   step "แพ็กเกจ Lambda"
   resolve_pandas_layer
-  [[ -d "$REPO_DIR/function" && -d "$REPO_DIR/ingestion" && -d "$REPO_DIR/contracts" ]] \
-    || die "ไม่พบโฟลเดอร์ function/ ingestion/ contracts/ ใน $REPO_DIR (ต้องรันจาก repo)"
+  [[ -d "$REPO_DIR/function" && -d "$REPO_DIR/jobs" && -d "$REPO_DIR/contracts" ]] \
+    || die "ไม่พบโฟลเดอร์ function/ jobs/ contracts/ ใน $REPO_DIR (ต้องรันจาก repo)"
   local f
   for f in gee/communities.csv sql/curated_merge.sql \
-           ingestion/ingest.py ingestion/validate_gate.py ingestion/verify_curated.py; do
+           jobs/ingest.py jobs/validate_gate.py jobs/verify_curated.py; do
     [[ -f "$REPO_DIR/$f" ]] || die "ไม่พบ $f"
   done
   mkdir -p "$TMP_DIR/light" "$TMP_DIR/heavy" "$TMP_DIR/zips"
@@ -68,7 +68,7 @@ build_packages() {
     mkdir -p "$b/contracts" "$b/gee" "$b/sql"
     cp -R "$TMP_DIR/$kind/." "$b/"
     cp "$REPO_DIR/function/$dir/lambda_function.py" "$b/"
-    cp "$REPO_DIR"/ingestion/ingest.py "$REPO_DIR"/ingestion/validate_gate.py "$REPO_DIR"/ingestion/verify_curated.py "$b/"
+    cp "$REPO_DIR"/jobs/ingest.py "$REPO_DIR"/jobs/validate_gate.py "$REPO_DIR"/jobs/verify_curated.py "$b/"
     cp "$REPO_DIR"/contracts/*.yaml "$b/contracts/"
     cp "$REPO_DIR/gee/communities.csv" "$b/gee/"
     sed -E "s/cs341-ronnai-[0-9]+/$BUCKET/g" "$REPO_DIR/sql/curated_merge.sql" >"$b/sql/curated_merge.sql"   # LOCATION = bucket ของบัญชีนี้
@@ -205,7 +205,7 @@ deploy() {
   printf '%s\n' \
     "  Flow อัตโนมัติ: incoming/<source>_<year>.csv -> Step Functions $(sfn_arn)" \
     "                  CheckBatch -> IngestBatch -> ValidateBatch -> TransformCurated -> VerifyCurated" \
-    "  ต่อด้วย: ./infra/ronnai_aws.sh view   (สร้างตาราง curated + view ตอบ Q1)" \
+    "  ต่อด้วย: ./infra/ronnai_aws.sh view   (สร้างตาราง curated + view curated_*)" \
     "  รันทั้ง pipeline: ./infra/ronnai_aws.sh run   (อัปโหลด data/gee_$YEAR/ ทั้ง 3 แหล่ง แล้วรอดูผลแต่ละขั้น)" \
     "  ไฟล์ซ้ำ (เคยสำเร็จแล้ว) จะถูกย้ายไป s3://$BUCKET/quarantine/duplicate/ และ execution จบที่ AlreadyProcessed" \
     "  ดูทีละขั้น: Step Functions console > $NAME_PREFIX-pipeline > execution > Graph view" \

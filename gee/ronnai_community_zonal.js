@@ -1,6 +1,10 @@
 // ============================================================
-// RONNAI · M1 · Issue #4 (LST) + #5 (NDVI) + #6 (อาคาร)
+// RONNAI · M1 · Issue #4 (LST) + #5 (NDVI) + #6 (อาคาร)  [เวอร์ชัน POLYGON]
 // Zonal stats ต่อ "ชุมชน × buffer × ปี" -> CSV 3 ไฟล์ (lst, ndvi, buildings) ส่งเข้า ingestion #7
+//
+// ใช้แทน gee/ronnai_community_zonal.js (เวอร์ชันจุด) โดย COMM_ASSET ต้องเป็น asset "polygon ขอบเขตชุมชน"
+// (มี property community_id) buffer_m (300/500) จึงขยายออกจากขอบ polygon ไม่ใช่วงกลมรอบจุด
+// รูปแบบ CSV ที่ export ไม่เปลี่ยน (ยังมี buffer_m) จึงเข้า contracts/*.yaml เดิมได้
 //
 // credit: อ้างอิง/ดัดแปลงจากโค้ดของอาจารย์หมู  https://code.earthengine.google.com/?accept_repo=users/moukomlasitthisak/BDI_Day_1
 // logic ลบเมฆ + แปลง LST ต่อยอดจากสคริปต์ราย cell เขตหลักสี่ (ไฟล์เดิม)
@@ -10,9 +14,9 @@
 
 // ---------- 0. ตั้งค่า ----------
 var BASE = 'projects/turnkey-tribute-511903-t6/assets/';
-var COMM_ASSET   = BASE + 'communities';  // asset ชุมชนจาก #3 (แก้ให้ตรงชื่อจริง)
-var COMM_ID_PROP = 'community_id';        // ชื่อ property ของ community_id
-// true = asset เป็นตาราง CSV ที่ไม่มี geometry (มีแค่คอลัมน์ lat, lon)
+var COMM_ASSET   = BASE + 'communities_polygon';  // asset POLYGON ชุมชน (แก้ให้ตรงชื่อจริง; ต้องเป็น WGS84 / EPSG:4326)
+var COMM_ID_PROP = 'comm_id';        // ชื่อ property ของ community_id (shapefile จำกัดชื่อฟิลด์ 10 ตัวอักษร จึงใช้ comm_id; ข้างล่างจะแปลงกลับเป็น community_id ให้เอง)
+// ต้องเป็น false เสมอในเวอร์ชันนี้ (true = สร้างจุดจาก lat/lon ซึ่งจะทิ้ง polygon)
 var BUILD_POINT_FROM_LATLON = false;
 
 var BUFFERS     = [300, 500];  // เมตร
@@ -50,13 +54,20 @@ if (BUILD_POINT_FROM_LATLON) {
 var commGeom = comm.geometry();
 Map.centerObject(commGeom, 11);
 print('จำนวนชุมชน', comm.size());
+// ตรวจว่าเป็น polygon จริง (ถ้าเห็น Point แปลว่าใช้ asset จุดเดิมอยู่ buffer จะกลายเป็นวงกลมรอบจุดแบบเก่า)
+print('ชนิด geometry (ต้องเป็น Polygon/MultiPolygon ทั้งหมด)',
+  comm.map(function (f) { return ee.Feature(null, {t: f.geometry().type()}); })
+      .aggregate_histogram('t'));
+print('พื้นที่ polygon เล็กสุด (ตร.ม.)',
+  comm.map(function (f) { return f.set('area_m2', f.geometry().area(1)); })
+      .aggregate_min('area_m2'));
 print('community_id ไม่ว่าง (ต้องเท่ากับจำนวนชุมชน)', comm.filter(ee.Filter.notNull(['community_id'])).size());
 
 // ---------- 2. ตัวช่วยร่วม ----------
 function seasonStart(year) { return ee.Date.fromYMD(year, MONTH_START, 1); }
 function seasonEnd(year)   { return ee.Date.fromYMD(year, MONTH_END + 1, 1); }  // end exclusive
 
-// สร้างโซน buffer ต่อชุมชน พร้อม key และ n_scenes (จำนวนภาพที่ทับ buffer นั้น)
+// สร้างโซนต่อชุมชน = polygon ขยายออกจากขอบ bufferM เมตร พร้อม key และ n_scenes (จำนวนภาพที่ทับ buffer นั้น)
 function zones(bufferM, year, rawCol) {
   return comm.map(function (f) {
     var g = f.geometry().buffer(bufferM, 1);
@@ -188,7 +199,7 @@ print('ตัวอย่าง NDVI', ndviAll.limit(5));
 print('จำนวนอาคารในพื้นที่ศึกษา (ต้องเป็นหลักพัน-หมื่น ไม่ใช่ 0)', buildingsFC().size());
 print('ตัวอย่างอาคาร (buffer แรก 3 แถว)', bldgTable(YEARS[0], BUFFERS[0]).limit(3));
 
-Map.addLayer(comm.style({color: 'red', pointSize: 3}), {}, 'ชุมชน');
+Map.addLayer(comm.style({color: 'red', fillColor: 'ff000033'}), {}, 'ชุมชน (polygon)');
 Map.addLayer(comm.map(function (f) {
   return ee.Feature(f.geometry().buffer(BUFFERS[BUFFERS.length - 1], 1));
 }).style({color: 'orange', fillColor: '00000000'}), {}, 'buffer ใหญ่สุด');

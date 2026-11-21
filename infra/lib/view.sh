@@ -1,12 +1,12 @@
 # shellcheck shell=bash
-# view: ตาราง curated + view ตอบ Q1
+# view: ตาราง curated + view curated_*
 # ใช้ผ่าน infra/ronnai_aws.sh เท่านั้น (อาศัยตัวแปรที่ตั้งไว้ในไฟล์นั้น)
 
 view() {
   preflight
   PY="$(find_python)"
   [[ -n "$PY" ]] || die "ไม่พบ python3"
-  step "ตาราง curated + view ตอบ Q1 (Athena)"
+  step "ตาราง curated + view curated_* (Athena)"
   if [[ ! -f "$REPO_DIR/$VIEWS_SQL" ]]; then
     warn "ไม่พบ $VIEWS_SQL ข้ามขั้นนี้ (ตั้ง VIEWS_SQL=... ได้)"; return 0
   fi

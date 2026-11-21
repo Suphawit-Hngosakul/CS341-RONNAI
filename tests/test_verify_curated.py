@@ -19,7 +19,7 @@ import yaml
 from moto import mock_aws
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT / "ingestion"))
+sys.path.insert(0, str(ROOT / "jobs"))
 import verify_curated as vc  # noqa: E402
 
 BUCKET = "cs341-ronnai-test"

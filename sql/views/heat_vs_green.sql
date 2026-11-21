@@ -3,18 +3,18 @@
 -- ที่มา : ronnai_curated.community_heat (1 แถว/ชุมชน, buffer แยกเป็นคอลัมน์)
 -- ใช้ buffer 300 และ 500 m (ทำแยกกัน ไม่ปนกัน)
 -- รันทีละ statement ใน Athena (workgroup ronnai-wg, database ronnai_curated)
---   [1] view v_q1_base         : ดึงค่าที่ใช้ จัดเป็นแถวละ (ชุมชน, buffer)
---   [2] view v_q1_heat_vs_green: ตาราง 4 กลุ่ม เทียบ LST เฉลี่ย
---   [3] view v_q1_correlation  : corr(lst, ndvi) และ corr(lst, builtup)
+--   [1] view curated_base         : ดึงค่าที่ใช้ จัดเป็นแถวละ (ชุมชน, buffer)
+--   [2] view curated_heat_vs_green: ตาราง 4 กลุ่ม เทียบ LST เฉลี่ย
+--   [3] view curated_correlation  : corr(lst, ndvi) และ corr(lst, builtup)
 --   [4] SELECT ผลลัพธ์ (จด "Data scanned" หลังรัน)
 -- นิยามกลุ่ม: แบ่งด้วย median ของ NDVI และ builtup_pct "ภายในแต่ละ buffer/ปี"
---   ndvi_group    = green_high ถ้า ndvi_mean   >= median, ไม่งั้น green_low
---   builtup_group = built_high ถ้า builtup_pct >= median, ไม่งั้น built_low
+--   green_area_group       = green_high ถ้า ndvi_mean   >= median, ไม่งั้น green_low
+--   building_density_group = built_high ถ้า builtup_pct >= median, ไม่งั้น built_low
 --   (ค่าที่เท่ากับ median นับเป็นกลุ่ม high; median ใช้ approx_percentile(x, 0.5))
 -- ============================================================
 
 -- [1] ------------------------------------------------------
-CREATE OR REPLACE VIEW ronnai_curated.v_q1_base AS
+CREATE OR REPLACE VIEW ronnai_curated.curated_base AS
 SELECT community_id, year, 300 AS buffer_m,
        lst_mean_300 AS lst_mean, ndvi_mean_300 AS ndvi_mean, builtup_pct_300 AS builtup_pct
 FROM ronnai_curated.community_heat
@@ -24,9 +24,9 @@ SELECT community_id, year, 500 AS buffer_m,
 FROM ronnai_curated.community_heat;
 
 -- [2] ------------------------------------------------------
-CREATE OR REPLACE VIEW ronnai_curated.v_q1_heat_vs_green AS
+CREATE OR REPLACE VIEW ronnai_curated.curated_heat_vs_green AS
 WITH base AS (
-  SELECT * FROM ronnai_curated.v_q1_base
+  SELECT * FROM ronnai_curated.curated_base
   WHERE lst_mean IS NOT NULL AND ndvi_mean IS NOT NULL AND builtup_pct IS NOT NULL
 ),
 med AS (
@@ -43,24 +43,28 @@ grp AS (
   FROM base b
   JOIN med m ON b.buffer_m = m.buffer_m AND b.year = m.year
 )
-SELECT buffer_m, year, ndvi_group, builtup_group,
-       count(*)                   AS n_communities,
-       round(avg(lst_mean), 3)    AS lst_mean_avg,
-       round(avg(ndvi_mean), 4)   AS ndvi_mean_avg,
-       round(avg(builtup_pct), 2) AS builtup_pct_avg
+SELECT buffer_m                          AS buffer_m,
+       year                              AS year,
+       ndvi_group                        AS green_area_group,
+       builtup_group                     AS building_density_group,
+       count(*)                          AS community_count,
+       round(avg(lst_mean), 3)           AS average_surface_temperature_c,
+       round(stddev(lst_mean), 3)        AS surface_temperature_standard_deviation_c,
+       round(avg(ndvi_mean), 4)          AS average_green_area_ndvi,
+       round(avg(builtup_pct), 2)        AS average_building_density_pct
 FROM grp
 GROUP BY buffer_m, year, ndvi_group, builtup_group;
 
 -- [3] ------------------------------------------------------
-CREATE OR REPLACE VIEW ronnai_curated.v_q1_correlation AS
+CREATE OR REPLACE VIEW ronnai_curated.curated_correlation AS
 SELECT buffer_m, year,
        count(*)                          AS n_communities,
        round(corr(lst_mean, ndvi_mean), 4)   AS corr_lst_ndvi,      -- คาดว่าติดลบ
        round(corr(lst_mean, builtup_pct), 4) AS corr_lst_builtup    -- คาดว่าเป็นบวก
-FROM ronnai_curated.v_q1_base
+FROM ronnai_curated.curated_base
 WHERE lst_mean IS NOT NULL AND ndvi_mean IS NOT NULL AND builtup_pct IS NOT NULL
 GROUP BY buffer_m, year;
 
 -- [4] ผลลัพธ์ (รันทีละอัน แล้วดู "Data scanned" ใต้ผล) -----------
-SELECT * FROM ronnai_curated.v_q1_heat_vs_green ORDER BY buffer_m, ndvi_group DESC, builtup_group DESC;
-SELECT * FROM ronnai_curated.v_q1_correlation ORDER BY buffer_m;
+SELECT * FROM ronnai_curated.curated_heat_vs_green ORDER BY buffer_m, green_area_group DESC, building_density_group DESC;
+SELECT * FROM ronnai_curated.curated_correlation ORDER BY buffer_m;

@@ -41,7 +41,7 @@ Pipeline รันบน AWS ด้วย **Step Functions + Lambda** วาง�
 | Lambda 6 ตัว | `function/<ชื่อ>_function/lambda_function.py` (start, batch=check, ingest, validate, transform, verify) |
 | logic ที่ Lambda ใช้ร่วมกับ CLI | `ingestion/ingest.py`, `ingestion/validate_gate.py`, `ingestion/verify_curated.py` |
 | data contract | `contracts/*.yaml` |
-| SQL | `sql/glue_trusted.sql`, `sql/curated_merge.sql`, `sql/views/heat_vs_green.sql` (view ตอบ Q1) |
+| SQL | `sql/glue_trusted.sql`, `sql/curated_merge.sql`, `sql/views/heat_vs_green.sql` (view curated_*) |
 
 ## รันทีละขั้นบนเครื่อง (ไม่ผ่าน Lambda ใช้ตอนดีบัก)
 
@@ -77,7 +77,7 @@ infra/          # ronnai_aws.sh (คำสั่งหลัก) + lib/ + tools/
 function/       # Lambda handler 6 ตัว
 ingestion/      # ingest / validation gate / verify (ใช้ได้ทั้ง CLI และ Lambda)
 contracts/      # data contract (YAML) ต่อแหล่ง
-sql/            # Glue trusted, curated MERGE, views ตอบ Q1
+sql/            # Glue trusted, curated MERGE, views curated_*
 gee/            # สคริปต์ GEE + communities.csv (master list)
 tests/          # pytest (ไม่ต้องใช้ AWS จริง)
 config/         # settings.example.yaml
