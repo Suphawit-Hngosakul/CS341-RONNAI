@@ -65,6 +65,7 @@ buffer คือการ **ขยาย polygon ออกจากขอบ** �
 | ไฟล์ | คอลัมน์ | หน่วย / ช่วงค่า |
 |---|---|---|
 | `lst_2026.csv` | `community_id, buffer_m, year` | รหัสชุมชน, 300 หรือ 500, 2026 |
+| | `zone_type` | ค่าคงที่ `polygon_r150` (ตัวแปร `ZONE_TYPE` ในสคริปต์) ทุกไฟล์มีคอลัมน์นี้ |
 | | `lst_mean`, `lst_p90` | °C (คาดว่าราว 30–45) |
 | | `valid_pixel_ratio` | 0–1 |
 | | `n_scenes` | จำนวนเต็ม |
@@ -78,6 +79,8 @@ buffer คือการ **ขยาย polygon ออกจากขอบ** �
 
 - โซนที่ไม่มีพิกเซลใช้ได้เลยอาจได้ช่องว่าง
 - ชื่อคอลัมน์ต้องตรงกับ `contracts/lst.yaml`, `contracts/ndvi.yaml`, `contracts/buildings.yaml` ของ repo
+- `zone_type` (#33) บอกว่าค่าคำนวณจากโซนเวอร์ชันไหน contract v2 รับเฉพาะ `polygon_r150` ไฟล์เวอร์ชันจุดเดิม (ไม่มีคอลัมน์นี้) จะถูกกักทั้ง batch และ pipeline จะไม่ MERGE ถ้า trusted ของ 3 แหล่งมี `zone_type` ไม่ตรงกัน
+  ถ้าเปลี่ยนรูปทรง/รัศมี polygon (เช่นได้ขอบเขตชุมชนจริง) ให้เปลี่ยน `ZONE_TYPE` และ `allowed_values` ของ `zone_type` ใน contract ทั้ง 3 ไฟล์พร้อมกัน แล้วอัปใหม่ครบ 3 ไฟล์
 
 ## 6. ไฟล์ในโฟลเดอร์นี้
 

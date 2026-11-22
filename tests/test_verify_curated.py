@@ -49,9 +49,10 @@ class FakeAthena:
 def build_db(with_batch_id=True):
     con = sqlite3.connect(":memory:")
     cols = ", ".join(f"{c} REAL" for c in VALUE_COLS)
-    con.execute(f"CREATE TABLE community_heat (community_id TEXT, year INTEGER, {cols})")
+    con.execute(f"CREATE TABLE community_heat (community_id TEXT, year INTEGER, zone_type TEXT, {cols})")
     for cid in IDS:
-        con.execute(f"INSERT INTO community_heat VALUES (?, 2026, {', '.join('1.0' for _ in VALUE_COLS)})", [cid])
+        con.execute(f"INSERT INTO community_heat VALUES (?, 2026, 'polygon_r150', {', '.join('1.0' for _ in VALUE_COLS)})",
+                    [cid])
     con.execute("ATTACH ':memory:' AS ronnai_trusted")
     for src, batch in SOURCES.items():
         extra = ", batch_id TEXT" if with_batch_id else ""
@@ -191,3 +192,17 @@ def test_missing_config_is_error_exit_2(tmp_path, capsys):
     code = vc.main(["--config", str(tmp_path / "nope.yaml")], athena_factory=lambda: None)
     assert code == 2
     assert "ไม่พบ" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------- zone_type (#33)
+@pytest.mark.parametrize("zone, problem", [(None, "zone_type ว่าง"), ("point", "zone_type ปนกัน")])
+def test_mixed_or_missing_zone_type_fails(zone, problem):
+    con = build_db()
+    con.execute("UPDATE community_heat SET zone_type = ? WHERE community_id = 'C0001'", [zone])
+    result, problems = vc.run_checks(FakeAthena(con), "community_heat", 2026, 36, 100.0)
+    assert any(problem in p for p in problems)
+
+
+def test_single_zone_type_is_reported():
+    result, problems = vc.run_checks(FakeAthena(build_db()), "community_heat", 2026, 36, 100.0)
+    assert problems == [] and result["zone_types"] == ["polygon_r150"]

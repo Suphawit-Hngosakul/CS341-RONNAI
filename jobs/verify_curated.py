@@ -4,6 +4,7 @@ query ตรวจ 3 อย่าง (ผ่าน Athena)
   1. row count   จำนวนแถวต้องเท่ากับที่คาด (นับจาก gee/communities.csv)
   2. key ไม่ซ้ำ  GROUP BY <key> HAVING count(*) > 1 ต้องไม่มีผล
   3. coverage    % ของแถวที่มีค่าครบทั้ง LST, NDVI, built-up (ค่าเริ่มต้นต้อง 100%)
+  4. zone_type   (#33) ทุกแถวต้องมี zone_type ค่าเดียวกัน (ไม่ปนเวอร์ชันจุด/polygon)
 
 ผ่านทั้งหมด -> เขียน s3://<bucket>/curated/_SUCCESS.json (batch_id, เวลา, row count, coverage ฯลฯ) exit 0
 ไม่ผ่าน     -> พิมพ์เหตุผล ไม่เขียนไฟล์ exit 1     (เกิดข้อผิดพลาดของตัวสคริปต์/AWS = exit 2)
@@ -129,6 +130,15 @@ def run_checks(athena, table, year, expected, min_coverage):
     if cov < min_coverage:
         problems.append(f"coverage = {cov}% (ต้อง >= {min_coverage}%)  ครบ {complete}/{total} แถว")
 
+    # 3b) zone_type ค่าเดียวทั้งตาราง (#33)
+    zr = athena.query(f"SELECT zone_type, count(*) AS c FROM {tbl} {where} GROUP BY zone_type ORDER BY zone_type")
+    zones = {(z["zone_type"] or None): int(z["c"]) for z in zr}
+    out["zone_types"] = sorted(z for z in zones if z)
+    if None in zones:
+        problems.append(f"zone_type ว่าง {zones[None]} แถว (ข้อมูลก่อน #33 ค้างใน curated)")
+    if len(out["zone_types"]) > 1:
+        problems.append(f"zone_type ปนกัน {zones}")
+
     # 4) null รายคอลัมน์ (แสดงว่าขาดตรงไหน ใช้ดูอย่างเดียว ไม่มีผลต่อผ่าน/ไม่ผ่าน)
     cols = spec["complete"]
     sel = ", ".join(f"sum(CASE WHEN {c} IS NULL THEN 1 ELSE 0 END) AS {c}" for c in cols)
@@ -192,6 +202,7 @@ def main(argv=None, athena_factory=None):
         print(f"  row count  : {result['row_count']} (คาด {expected})")
         print(f"  key ซ้ำ    : {result['duplicate_keys']} ชุด")
         print(f"  coverage   : {result['coverage_pct']}%  (ครบ {result['complete_rows']} แถว)")
+        print(f"  zone_type  : {result['zone_types'] or '-'}")
         nulls = {k: v for k, v in result["null_counts"].items() if v}
         print("  null       : " + (", ".join(f"{k}={v}" for k, v in nulls.items()) if nulls else "ไม่มี"))
         if result["incomplete_keys"]:
@@ -219,6 +230,7 @@ def main(argv=None, athena_factory=None):
             "row_count": result["row_count"], "expected_rows": expected,
             "duplicate_keys": 0,
             "coverage_pct": result["coverage_pct"], "complete_rows": result["complete_rows"],
+            "zone_types": result["zone_types"],
             "source_batches": trusted_batches(athena, trusted_db, args.year),
         }
         if args.no_write:

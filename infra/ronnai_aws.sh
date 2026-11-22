@@ -7,11 +7,12 @@
 #   ./infra/ronnai_aws.sh all        คำสั่งเดียวตั้งแต่บัญชีว่าง: setup -> deploy -> view -> run (รันซ้ำได้)
 #   ./infra/ronnai_aws.sh setup      สร้าง S3 bucket + 6 zones, Glue DB 2 อัน, Athena workgroup
 #   ./infra/ronnai_aws.sh verify     ตรวจว่าครบ + รัน SELECT 1 ใน Athena
-#   ./infra/ronnai_aws.sh deploy     สร้างตาราง trusted (sql/glue_trusted.sql) + สร้าง/อัปเดต Lambda 6 ตัว (function/)
+#   ./infra/ronnai_aws.sh deploy     สร้างตาราง trusted (sql/glue_trusted.sql) + สร้าง/อัปเดต Lambda 7 ตัว (function/)
 #                                    (validate ใช้ pandas/pyarrow จาก Lambda layer ของ AWS: PANDAS_LAYER_ARN)
 #                                    + state machine ของ Step Functions (infra/state_machine.asl.json)
 #                                    + กฎ EventBridge 1 ข้อ: ไฟล์ใหม่ใน incoming/ -> Lambda start-pipeline -> เริ่ม execution
 #                                    ใน execution: check -> ingest -> validate -> transform -> verify
+#                                    (ไฟล์ซ้ำ/ชื่อผิด: check -> quarantine-file -> quarantine/)
 #   ./infra/ronnai_aws.sh run        (Issue #18) อัปโหลด data/gee_<YEAR>/ ทั้ง 3 แหล่งเข้า incoming/ แล้วรอดูผลทีละขั้น
 #                                    YEAR=2026 เป็นค่าเริ่มต้น  รันซ้ำได้: ไฟล์เดิมจะจบที่ AlreadyProcessed
 #   ./infra/ronnai_aws.sh view       สร้างตาราง curated (ถ้ายังไม่มี) + view curated_* (sql/views/heat_vs_green.sql)
@@ -65,6 +66,7 @@ FUNCS=(
   "validate-batch:validate_function:300:2048:heavy"
   "transform-batch:transform_function:900:256:light"
   "verify-batch:verify_function:300:256:light"
+  "quarantine-file:quarantine_function:60:256:light"   # (Issue #32) ไฟล์ซ้ำ/ชื่อผิด -> quarantine/ (ไม่อยู่บนทางหลัก)
 )
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

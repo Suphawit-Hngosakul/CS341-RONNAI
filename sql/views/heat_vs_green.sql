@@ -15,11 +15,11 @@
 
 -- [1] ------------------------------------------------------
 CREATE OR REPLACE VIEW ronnai_curated.curated_base AS
-SELECT community_id, year, 300 AS buffer_m,
+SELECT community_id, year, zone_type, 300 AS buffer_m,
        lst_mean_300 AS lst_mean, ndvi_mean_300 AS ndvi_mean, builtup_pct_300 AS builtup_pct
 FROM ronnai_curated.community_heat
 UNION ALL
-SELECT community_id, year, 500 AS buffer_m,
+SELECT community_id, year, zone_type, 500 AS buffer_m,
        lst_mean_500 AS lst_mean, ndvi_mean_500 AS ndvi_mean, builtup_pct_500 AS builtup_pct
 FROM ronnai_curated.community_heat;
 

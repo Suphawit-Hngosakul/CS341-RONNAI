@@ -2,11 +2,14 @@
 
   1. ถ้า trusted ของปีนี้ยังไม่ครบทั้ง 3 แหล่ง (lst, ndvi, buildings) -> WAITING_FOR_SOURCES (ยังไม่ MERGE)
   2. รัน MSCK REPAIR TABLE ของตาราง trusted ทั้ง 3 ตาราง (ลงทะเบียน partition year=… ที่เพิ่งถูกเขียน ไม่งั้น Athena มองไม่เห็นข้อมูลใหม่)
+  2b. (#33) ตรวจ zone_type ของ trusted ทั้ง 3 แหล่งในปีนี้: ต้องมีค่าเดียวกันและไม่ว่าง ไม่งั้นคืน ZONE_MISMATCH (ไม่ MERGE)
+      กันกรณีข้อมูลเวอร์ชันจุดเดิมค้างอยู่ใน trusted แล้วอัป polygon มาแค่บางแหล่ง -> curated ปนสองเวอร์ชัน
   3. รันบล็อก [1] CREATE TABLE IF NOT EXISTS และบล็อก [2] MERGE INTO ของ sql/curated_merge.sql ผ่าน Athena
      MERGE รันซ้ำได้ผลเหมือนเดิม (ไม่สร้างแถวซ้ำ) จึงปลอดภัยเมื่อ Step Functions retry หลังล้มเหลวกลางทาง
 
 input  : output ของ validate (status PASSED หรือ PARTIAL)  {"bucket", "source", "year", "batch_id"}
-output : {"status": "TRANSFORMED" | "WAITING_FOR_SOURCES", "missing_sources": [...], "merge_query_id", ...}
+output : {"status": "TRANSFORMED" | "WAITING_FOR_SOURCES" | "ZONE_MISMATCH", "missing_sources": [...],
+          "zone_types": {source: [zone_type, ...]}, "merge_query_id", ...}
 error  : Athena query FAILED/CANCELLED/หมดเวลา -> raise
 
 ตัวแปรสภาพแวดล้อม: BUCKET, ATHENA_WORKGROUP (ronnai-wg), CURATED_DB (ronnai_curated), TRUSTED_DB (ronnai_trusted),
@@ -61,6 +64,43 @@ def _run_athena(client, sql, workgroup, database, timeout):
         time.sleep(2)
 
 
+def _query_rows(client, sql, workgroup, database, timeout):
+    """รัน SELECT แล้วคืน list ของ dict (ค่าเป็น string หรือ None)"""
+    qid = _run_athena(client, sql, workgroup, database, timeout)
+    rows = []
+    for page in client.get_paginator("get_query_results").paginate(QueryExecutionId=qid):
+        rows += page["ResultSet"]["Rows"]
+    if not rows:
+        return []
+    header = [d.get("VarCharValue", "") for d in rows[0]["Data"]]
+    return [dict(zip(header, [d.get("VarCharValue") for d in r["Data"]])) for r in rows[1:]]
+
+
+def zone_type_sql(trusted_db, year):
+    """zone_type ที่มีใน trusted ของปีนี้ แยกตามแหล่ง (NULL = แถวเก่าที่ไม่มีคอลัมน์ zone_type)"""
+    return " UNION ALL ".join(
+        f"SELECT '{s}' AS source, zone_type FROM {trusted_db}.{s} WHERE year = {int(year)} GROUP BY zone_type"
+        for s in SOURCES)
+
+
+def zone_problems(rows):
+    """rows จาก zone_type_sql -> ({source: [zone_type,...]}, [ปัญหา])  ผ่านเมื่อทุกแหล่งมี zone_type ค่าเดียวกันค่าเดียว"""
+    found = {s: [] for s in SOURCES}
+    for r in rows:
+        found.setdefault(r["source"], []).append(r["zone_type"])
+    problems = []
+    for s, zs in found.items():
+        if any(z in (None, "") for z in zs):
+            problems.append(f"{s}: มีแถวที่ไม่มี zone_type (ข้อมูลเวอร์ชันจุดเดิมค้างใน trusted)")
+        if len({z for z in zs if z}) > 1:
+            problems.append(f"{s}: มีหลาย zone_type {sorted(z for z in zs if z)}")
+    all_z = {z for zs in found.values() for z in zs if z}
+    if len(all_z) > 1:
+        problems.append(f"แต่ละแหล่งใช้ zone_type ต่างกัน {dict((s, sorted(set(z for z in zs if z))) for s, zs in found.items())}")
+    found = {s: sorted({z for z in zs if z}) for s, zs in found.items()}
+    return found, problems
+
+
 def lambda_handler(event, context=None):
     import boto3
 
@@ -83,7 +123,11 @@ def lambda_handler(event, context=None):
     trusted_db = os.environ.get("TRUSTED_DB", "ronnai_trusted")
     for src in SOURCES:                                                   # ลงทะเบียน partition ใหม่ก่อน MERGE (ตารางต้องมีอยู่แล้ว)
         _run_athena(athena, f"MSCK REPAIR TABLE {trusted_db}.{src}", workgroup, trusted_db, timeout)
+    zones, problems = zone_problems(_query_rows(athena, zone_type_sql(trusted_db, year), workgroup, trusted_db, timeout))
+    if problems:
+        print({"zone_mismatch": problems})
+        return {**base, "status": "ZONE_MISMATCH", "missing_sources": [], "zone_types": zones, "problems": problems}
     create_id = _run_athena(athena, blocks[1], workgroup, database, timeout)
     merge_id = _run_athena(athena, blocks[2].replace("year = 2026", f"year = {year}"), workgroup, database, timeout)
-    return {**base, "status": "TRANSFORMED", "missing_sources": [],
+    return {**base, "status": "TRANSFORMED", "missing_sources": [], "zone_types": zones,
             "repaired_tables": list(SOURCES), "create_query_id": create_id, "merge_query_id": merge_id}

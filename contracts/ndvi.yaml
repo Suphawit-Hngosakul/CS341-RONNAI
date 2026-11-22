@@ -1,8 +1,8 @@
 # Data contract: NDVI (Issue #8) — ผลิตโดย gee/ronnai_community_zonal.js (Issue #5)
 # ระดับกฎ: BLOCK = ไม่ผ่าน ส่งแถว/batch ไป quarantine | STANDARDIZE = แก้แล้วผ่าน | WARN = ผ่านแต่ log
 source: ndvi
-version: 1
-description: NDVI ต่อชุมชน x buffer x ปี (Sentinel-2 L2A, mask ด้วย SCL, ช่วงเวลาเดียวกับ LST)
+version: 2                 # v2 (#33): เวอร์ชัน polygon + คอลัมน์ zone_type
+description: NDVI ต่อชุมชน x buffer x ปี (Sentinel-2 L2A, mask ด้วย SCL, ช่วงเวลาเดียวกับ LST) โซน = polygon ชุมชน r150 ม. ขยาย buffer_m จากขอบ
 format: csv
 encoding: utf-8            # ไม่มี BOM
 key: [community_id, buffer_m, year]
@@ -35,6 +35,11 @@ columns:
   - name: year
     type: int
     nullable: false
+  - name: zone_type                # เวอร์ชันโซนที่ GEE ใช้ (#33) ไฟล์เวอร์ชันจุดเดิมไม่มีคอลัมน์นี้ -> BATCH_BLOCKED
+    type: string
+    nullable: false
+    checks:
+      - {rule: allowed_values, values: [polygon_r150], level: BLOCK}
   - name: ndvi_mean
     type: float
     unit: index
