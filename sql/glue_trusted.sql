@@ -26,6 +26,7 @@
 CREATE EXTERNAL TABLE IF NOT EXISTS ronnai_trusted.lst (
     community_id      string,
     buffer_m          bigint,
+    zone_type         string,
     lst_mean          double,
     lst_p90           double,
     valid_pixel_ratio double,
@@ -40,6 +41,7 @@ LOCATION 's3://cs341-ronnai-477710504722/trusted/lst/';
 CREATE EXTERNAL TABLE IF NOT EXISTS ronnai_trusted.ndvi (
     community_id      string,
     buffer_m          bigint,
+    zone_type         string,
     ndvi_mean         double,
     green_ratio       double,
     valid_pixel_ratio double,
@@ -54,6 +56,7 @@ LOCATION 's3://cs341-ronnai-477710504722/trusted/ndvi/';
 CREATE EXTERNAL TABLE IF NOT EXISTS ronnai_trusted.buildings (
     community_id      string,
     buffer_m          bigint,
+    zone_type         string,
     builtup_pct       double,
     building_count    bigint,
     batch_id          string

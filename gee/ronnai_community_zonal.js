@@ -4,7 +4,7 @@
 //
 // ใช้แทน gee/ronnai_community_zonal.js (เวอร์ชันจุด) โดย COMM_ASSET ต้องเป็น asset "polygon ขอบเขตชุมชน"
 // (มี property community_id) buffer_m (300/500) จึงขยายออกจากขอบ polygon ไม่ใช่วงกลมรอบจุด
-// รูปแบบ CSV ที่ export ไม่เปลี่ยน (ยังมี buffer_m) จึงเข้า contracts/*.yaml เดิมได้
+// CSV มีคอลัมน์ zone_type เพิ่ม (#33) = ZONE_TYPE ข้างล่าง ใช้กับ contracts/*.yaml version 2
 //
 // credit: อ้างอิง/ดัดแปลงจากโค้ดของอาจารย์หมู  https://code.earthengine.google.com/?accept_repo=users/moukomlasitthisak/BDI_Day_1
 // logic ลบเมฆ + แปลง LST ต่อยอดจากสคริปต์ราย cell เขตหลักสี่ (ไฟล์เดิม)
@@ -18,6 +18,10 @@ var COMM_ASSET   = BASE + 'communities_polygon';  // asset POLYGON ชุมช�
 var COMM_ID_PROP = 'comm_id';        // ชื่อ property ของ community_id (shapefile จำกัดชื่อฟิลด์ 10 ตัวอักษร จึงใช้ comm_id; ข้างล่างจะแปลงกลับเป็น community_id ให้เอง)
 // ต้องเป็น false เสมอในเวอร์ชันนี้ (true = สร้างจุดจาก lat/lon ซึ่งจะทิ้ง polygon)
 var BUILD_POINT_FROM_LATLON = false;
+
+// ป้ายเวอร์ชันโซน (#33): เขียนลงทุกแถวของทั้ง 3 ไฟล์ ให้ pipeline ไม่รวมข้อมูลต่างเวอร์ชันกัน
+// ต้องตรงกับ allowed_values ของ zone_type ใน contracts/*.yaml (เปลี่ยนรูปทรง/รัศมี polygon = เปลี่ยนค่านี้ + contract)
+var ZONE_TYPE   = 'polygon_r150';
 
 var BUFFERS     = [300, 500];  // เมตร
 var YEARS       = [2026];      // M1 ใช้ปีเดียว; เพิ่มปีได้ เช่น [2024, 2025, 2026]
@@ -75,6 +79,7 @@ function zones(bufferM, year, rawCol) {
       community_id: f.get('community_id'),
       buffer_m: bufferM,
       year: year,
+      zone_type: ZONE_TYPE,
       n_scenes: rawCol.filterBounds(g).size()
     });
   });
@@ -155,7 +160,7 @@ function bldgTable(year, bufferM) {
   var built = ee.Image().byte().paint(bld, 1).unmask(0).rename('built');
   var fc = comm.map(function (f) {
     return ee.Feature(f.geometry().buffer(bufferM, 1),
-      {community_id: f.get('community_id'), buffer_m: bufferM, year: year});
+      {community_id: f.get('community_id'), buffer_m: bufferM, year: year, zone_type: ZONE_TYPE});
   });
   var r = built.reduceRegions({
     collection: fc, reducer: ee.Reducer.mean(), scale: BLDG_SCALE, crs: CRS, tileScale: 8});  // ภาพแบนด์เดียว -> property 'mean'
@@ -185,11 +190,11 @@ YEARS.forEach(function (y) {
   });
 });
 
-var LST_COLS  = ['community_id', 'buffer_m', 'year', 'lst_mean', 'lst_p90',
+var LST_COLS  = ['community_id', 'buffer_m', 'year', 'zone_type', 'lst_mean', 'lst_p90',
                  'valid_pixel_ratio', 'n_scenes'];
-var NDVI_COLS = ['community_id', 'buffer_m', 'year', 'ndvi_mean', 'green_ratio',
+var NDVI_COLS = ['community_id', 'buffer_m', 'year', 'zone_type', 'ndvi_mean', 'green_ratio',
                  'valid_pixel_ratio', 'n_scenes'];
-var BLDG_COLS = ['community_id', 'buffer_m', 'year', 'builtup_pct', 'building_count'];
+var BLDG_COLS = ['community_id', 'buffer_m', 'year', 'zone_type', 'builtup_pct', 'building_count'];
 
 // ---------- 6. ตรวจเบื้องต้น (ก่อนกด RUN export) ----------
 print('คาดว่าได้กี่แถว = ชุมชน × buffer × ปี', comm.size().multiply(BUFFERS.length * YEARS.length));

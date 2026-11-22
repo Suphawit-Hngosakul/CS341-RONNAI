@@ -27,7 +27,9 @@ Pipeline รันบน AWS ด้วย **Step Functions + Lambda** วาง�
   -> S3 event "Object Created" -> EventBridge (กฎ ronnai-incoming-csv)
   -> Lambda ronnai-start-pipeline  (StartExecution)
   -> Step Functions ronnai-pipeline (1 ไฟล์ = 1 execution)
-       CheckBatch       ไฟล์ซ้ำที่เคยสำเร็จ -> quarantine/duplicate/ และจบที่ AlreadyProcessed
+       CheckBatch       ไฟล์ใหม่หรือเปล่า (ตรวจอย่างเดียว)
+         └ QuarantineFile  ไฟล์ซ้ำที่เคยสำเร็จ -> quarantine/duplicate/ จบที่ AlreadyProcessed
+                           ชื่อผิด/ไม่มี contract -> quarantine/rejected/ จบที่ FileRejected
        IngestBatch      incoming/ -> raw/source=<src>/batch_id=<id>/ + manifest.json
        ValidateBatch    ตรวจตาม contracts/<source>.yaml  แถวผ่าน -> trusted/  แถวไม่ผ่าน -> quarantine/
        TransformCurated เมื่อ trusted ครบ 3 แหล่ง: Athena MERGE -> curated (Iceberg)  ยังไม่ครบ -> WaitingForOtherSources
@@ -38,7 +40,7 @@ Pipeline รันบน AWS ด้วย **Step Functions + Lambda** วาง�
 | ส่วน | ไฟล์ |
 |---|---|
 | state machine | [`infra/state_machine.asl.json`](infra/state_machine.asl.json) |
-| Lambda 6 ตัว | `function/<ชื่อ>_function/lambda_function.py` (start, batch=check, ingest, validate, transform, verify) |
+| Lambda 7 ตัว | `function/<ชื่อ>_function/lambda_function.py` (start, batch=check, ingest, validate, transform, verify, quarantine) |
 | logic ที่ Lambda ใช้ร่วมกับ CLI | `ingestion/ingest.py`, `ingestion/validate_gate.py`, `ingestion/verify_curated.py` |
 | data contract | `contracts/*.yaml` |
 | SQL | `sql/glue_trusted.sql`, `sql/curated_merge.sql`, `sql/views/heat_vs_green.sql` (view curated_*) |
@@ -74,7 +76,7 @@ python ingestion\validate_gate.py --source lst --latest                         
 
 ```
 infra/          # ronnai_aws.sh (คำสั่งหลัก) + lib/ + tools/ + state_machine.asl.json
-function/       # Lambda handler 6 ตัว
+function/       # Lambda handler 7 ตัว
 ingestion/      # ingest / validation gate / verify (ใช้ได้ทั้ง CLI และ Lambda)
 contracts/      # data contract (YAML) ต่อแหล่ง
 sql/            # Glue trusted, curated MERGE, views curated_*

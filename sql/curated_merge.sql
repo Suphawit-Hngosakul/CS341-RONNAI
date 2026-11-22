@@ -3,6 +3,8 @@
 -- ต้องทำ #10 (ตาราง ronnai_trusted.lst / ndvi / buildings) ให้ผ่านก่อน
 -- ชื่อคอลัมน์ = <ชื่อค่า>_<buffer เมตร> เช่น lst_mean_300, lst_mean_500
 -- key = (community_id, year)  คาดว่ามี 36 แถวต่อปี (36 ชุมชน)
+-- zone_type (#33) = เวอร์ชันโซนของ GEE (เช่น polygon_r150) transform_function ตรวจก่อน MERGE ว่า 3 แหล่งเป็นค่าเดียวกัน
+-- ตารางที่สร้างก่อน #33 ไม่มีคอลัมน์ zone_type: DROP TABLE ronnai_curated.community_heat แล้วรัน [1] ใหม่
 -- แหล่งไหนไม่มีข้อมูลของชุมชนนั้น คอลัมน์ของแหล่งนั้นเป็น NULL
 -- ถ้าใช้ bucket อื่น แก้ LOCATION ใน [1] ถ้าเปลี่ยนปี แก้ year = 2026 ใน [2] ทั้ง 3 จุด
 
@@ -10,6 +12,7 @@
 CREATE TABLE IF NOT EXISTS ronnai_curated.community_heat (
   community_id                string,
   year                        int,
+  zone_type                   string,
   lst_mean_300                double,
   lst_mean_500                double,
   lst_p90_300                 double,
@@ -42,7 +45,7 @@ MERGE INTO ronnai_curated.community_heat AS t
 USING (
   WITH
   l AS (
-    SELECT community_id, year,
+    SELECT community_id, year, max(zone_type) AS zone_type,
       max(CASE WHEN buffer_m = 300 THEN lst_mean END) AS lst_mean_300,
       max(CASE WHEN buffer_m = 500 THEN lst_mean END) AS lst_mean_500,
       max(CASE WHEN buffer_m = 300 THEN lst_p90 END) AS lst_p90_300,
@@ -54,7 +57,7 @@ USING (
     FROM ronnai_trusted.lst WHERE year = 2026 GROUP BY community_id, year
   ),
   n AS (
-    SELECT community_id, year,
+    SELECT community_id, year, max(zone_type) AS zone_type,
       max(CASE WHEN buffer_m = 300 THEN ndvi_mean END) AS ndvi_mean_300,
       max(CASE WHEN buffer_m = 500 THEN ndvi_mean END) AS ndvi_mean_500,
       max(CASE WHEN buffer_m = 300 THEN green_ratio END) AS green_ratio_300,
@@ -66,7 +69,7 @@ USING (
     FROM ronnai_trusted.ndvi WHERE year = 2026 GROUP BY community_id, year
   ),
   b AS (
-    SELECT community_id, year,
+    SELECT community_id, year, max(zone_type) AS zone_type,
       max(CASE WHEN buffer_m = 300 THEN builtup_pct END) AS builtup_pct_300,
       max(CASE WHEN buffer_m = 500 THEN builtup_pct END) AS builtup_pct_500,
       max(CASE WHEN buffer_m = 300 THEN building_count END) AS building_count_300,
@@ -76,6 +79,7 @@ USING (
   SELECT
     coalesce(l.community_id, n.community_id, b.community_id) AS community_id,
     coalesce(l.year, n.year, b.year) AS year,
+    coalesce(l.zone_type, n.zone_type, b.zone_type) AS zone_type,
     l.lst_mean_300,
     l.lst_mean_500,
     l.lst_p90_300,
@@ -103,7 +107,8 @@ USING (
 ) AS s
 ON t.community_id = s.community_id AND t.year = s.year
 WHEN MATCHED AND (
-     t.lst_mean_300 IS DISTINCT FROM s.lst_mean_300
+     t.zone_type IS DISTINCT FROM s.zone_type
+  OR t.lst_mean_300 IS DISTINCT FROM s.lst_mean_300
   OR t.lst_mean_500 IS DISTINCT FROM s.lst_mean_500
   OR t.lst_p90_300 IS DISTINCT FROM s.lst_p90_300
   OR t.lst_p90_500 IS DISTINCT FROM s.lst_p90_500
@@ -124,6 +129,7 @@ WHEN MATCHED AND (
   OR t.building_count_300 IS DISTINCT FROM s.building_count_300
   OR t.building_count_500 IS DISTINCT FROM s.building_count_500
 ) THEN UPDATE SET
+  zone_type = s.zone_type,
   lst_mean_300 = s.lst_mean_300,
   lst_mean_500 = s.lst_mean_500,
   lst_p90_300 = s.lst_p90_300,
@@ -146,9 +152,9 @@ WHEN MATCHED AND (
   building_count_500 = s.building_count_500,
   updated_at = current_timestamp
 WHEN NOT MATCHED THEN INSERT (
-  community_id, year, lst_mean_300, lst_mean_500, lst_p90_300, lst_p90_500, lst_valid_pixel_ratio_300, lst_valid_pixel_ratio_500, lst_n_scenes_300, lst_n_scenes_500, ndvi_mean_300, ndvi_mean_500, green_ratio_300, green_ratio_500, ndvi_valid_pixel_ratio_300, ndvi_valid_pixel_ratio_500, ndvi_n_scenes_300, ndvi_n_scenes_500, builtup_pct_300, builtup_pct_500, building_count_300, building_count_500, updated_at
+  community_id, year, zone_type, lst_mean_300, lst_mean_500, lst_p90_300, lst_p90_500, lst_valid_pixel_ratio_300, lst_valid_pixel_ratio_500, lst_n_scenes_300, lst_n_scenes_500, ndvi_mean_300, ndvi_mean_500, green_ratio_300, green_ratio_500, ndvi_valid_pixel_ratio_300, ndvi_valid_pixel_ratio_500, ndvi_n_scenes_300, ndvi_n_scenes_500, builtup_pct_300, builtup_pct_500, building_count_300, building_count_500, updated_at
 ) VALUES (
-  s.community_id, s.year, s.lst_mean_300, s.lst_mean_500, s.lst_p90_300, s.lst_p90_500, s.lst_valid_pixel_ratio_300, s.lst_valid_pixel_ratio_500, s.lst_n_scenes_300, s.lst_n_scenes_500, s.ndvi_mean_300, s.ndvi_mean_500, s.green_ratio_300, s.green_ratio_500, s.ndvi_valid_pixel_ratio_300, s.ndvi_valid_pixel_ratio_500, s.ndvi_n_scenes_300, s.ndvi_n_scenes_500, s.builtup_pct_300, s.builtup_pct_500, s.building_count_300, s.building_count_500, current_timestamp
+  s.community_id, s.year, s.zone_type, s.lst_mean_300, s.lst_mean_500, s.lst_p90_300, s.lst_p90_500, s.lst_valid_pixel_ratio_300, s.lst_valid_pixel_ratio_500, s.lst_n_scenes_300, s.lst_n_scenes_500, s.ndvi_mean_300, s.ndvi_mean_500, s.green_ratio_300, s.green_ratio_500, s.ndvi_valid_pixel_ratio_300, s.ndvi_valid_pixel_ratio_500, s.ndvi_n_scenes_300, s.ndvi_n_scenes_500, s.builtup_pct_300, s.builtup_pct_500, s.building_count_300, s.building_count_500, current_timestamp
 );
 
 -- ================================================================ [3] ตรวจผล

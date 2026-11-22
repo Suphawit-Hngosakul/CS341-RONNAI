@@ -4,7 +4,7 @@
   "States": {
     "CheckBatch": {
       "Type": "Task",
-      "Comment": "Lambda 1: is this file new? (duplicate -> moved to quarantine/duplicate/)",
+      "Comment": "Lambda 1: is this file new? (only checks; duplicate / bad name go to QuarantineFile)",
       "Resource": "arn:aws:lambda:${REGION}:${ACCOUNT_ID}:function:${NAME_PREFIX}-check-batch",
       "Retry": [
         {
@@ -21,18 +21,41 @@
       "Type": "Choice",
       "Choices": [
         {"Variable": "$.status", "StringEquals": "NEW", "Next": "IngestBatch"},
+        {"Variable": "$.status", "StringEquals": "ALREADY_PROCESSED", "Next": "QuarantineFile"},
+        {"Variable": "$.status", "StringEquals": "REJECTED", "Next": "QuarantineFile"}
+      ],
+      "Default": "FileRejected"
+    },
+    "QuarantineFile": {
+      "Type": "Task",
+      "Comment": "Lambda (Issue #32): move the file out of incoming/ -> quarantine/duplicate/<source>/ (ALREADY_PROCESSED) or quarantine/rejected/ (REJECTED) + report.json",
+      "Resource": "arn:aws:lambda:${REGION}:${ACCOUNT_ID}:function:${NAME_PREFIX}-quarantine-file",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "PipelineFailed"}],
+      "Next": "IsDuplicate"
+    },
+    "IsDuplicate": {
+      "Type": "Choice",
+      "Choices": [
         {"Variable": "$.status", "StringEquals": "ALREADY_PROCESSED", "Next": "AlreadyProcessed"}
       ],
       "Default": "FileRejected"
     },
     "AlreadyProcessed": {
       "Type": "Succeed",
-      "Comment": "Same file content already succeeded before: nothing to do (re-run gives the same result)"
+      "Comment": "Same file content already succeeded before: file moved to quarantine/duplicate/, nothing else to do (re-run gives the same result)"
     },
     "FileRejected": {
       "Type": "Fail",
       "Error": "FileRejected",
-      "Cause": "File name must be incoming/<source>_<year>.csv and contracts/<source>.yaml must exist (see the CheckBatch output)"
+      "Cause": "File name must be incoming/<source>_<year>.csv and contracts/<source>.yaml must exist (see the CheckBatch output); the file was moved to quarantine/rejected/"
     },
     "IngestBatch": {
       "Type": "Task",
@@ -109,13 +132,19 @@
       "Type": "Choice",
       "Choices": [
         {"Variable": "$.status", "StringEquals": "TRANSFORMED", "Next": "VerifyCurated"},
-        {"Variable": "$.status", "StringEquals": "WAITING_FOR_SOURCES", "Next": "WaitingForOtherSources"}
+        {"Variable": "$.status", "StringEquals": "WAITING_FOR_SOURCES", "Next": "WaitingForOtherSources"},
+        {"Variable": "$.status", "StringEquals": "ZONE_MISMATCH", "Next": "ZoneMismatch"}
       ],
       "Default": "UnexpectedStatus"
     },
     "WaitingForOtherSources": {
       "Type": "Succeed",
       "Comment": "This source is in trusted/; the execution of the last source to arrive runs transform + verify"
+    },
+    "ZoneMismatch": {
+      "Type": "Fail",
+      "Error": "ZoneMismatch",
+      "Cause": "trusted/ of this year mixes zone_type (old point-version rows or different GEE zone versions): curated not merged. Re-upload all 3 sources of the same zone_type (see TransformCurated output: problems)"
     },
     "VerifyCurated": {
       "Type": "Task",

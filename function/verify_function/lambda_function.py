@@ -1,6 +1,7 @@
 """Lambda 5: verify_batch  ตรวจตาราง curated แล้วเขียน _SUCCESS.json (ใช้ตรรกะของ ingestion/verify_curated.py)
 
-ตรวจ 3 อย่าง (ผ่าน Athena): จำนวนแถว = จำนวนชุมชนใน gee/communities.csv, key ไม่ซ้ำ, coverage ครบตามเกณฑ์
+ตรวจ 4 อย่าง (ผ่าน Athena): จำนวนแถว = จำนวนชุมชนใน gee/communities.csv, key ไม่ซ้ำ, coverage ครบตามเกณฑ์,
+zone_type ค่าเดียวทั้งตาราง (#33)
 ผ่าน -> เขียน
   - s3://<bucket>/curated/_SUCCESS.json  (ผลของ curated ทั้งตาราง: row_count, coverage, source_batches ฯลฯ)
   - s3://<bucket>/raw/source=<src>/batch_id=<id>/_SUCCESS.json  ของทุก batch ที่อยู่ใน trusted ตอนนี้ (ใช้ batch_id ในตาราง)
@@ -58,7 +59,7 @@ def lambda_handler(event, context=None):
            "checked_at": now.isoformat(timespec="seconds"), "table": TABLE, "year": year,
            "row_count": result["row_count"], "expected_rows": expected, "duplicate_keys": 0,
            "coverage_pct": result["coverage_pct"], "complete_rows": result["complete_rows"],
-           "source_batches": batches}
+           "zone_types": result["zone_types"], "source_batches": batches}
     success_key = f"{curated}_SUCCESS.json"
     s3.put_object(Bucket=bucket, Key=success_key, ContentType="application/json",
                   Body=json.dumps(doc, ensure_ascii=False, indent=2).encode("utf-8"))

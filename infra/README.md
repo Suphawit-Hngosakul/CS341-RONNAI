@@ -10,7 +10,7 @@
 |---|---|
 | `setup` | S3 bucket + 6 zones, Glue DB 2 อัน, Athena workgroup, `config/settings.yaml` |
 | `verify` | ตรวจว่าของจาก `setup` ครบ + รัน `SELECT 1` ใน Athena |
-| `deploy` | ตาราง trusted ใน Glue, Lambda 6 ตัว, state machine `ronnai-pipeline`, กฎ EventBridge (ไฟล์ใหม่ใน `incoming/` -> เริ่ม execution) |
+| `deploy` | ตาราง trusted ใน Glue, Lambda 7 ตัว, state machine `ronnai-pipeline`, กฎ EventBridge (ไฟล์ใหม่ใน `incoming/` -> เริ่ม execution) |
 | `view` | ตาราง curated (ถ้ายังไม่มี) + view curated_* จาก `sql/views/heat_vs_green.sql` |
 | `run` | อัปโหลด `data/gee_<YEAR>/` ทั้ง 3 แหล่งเข้า `incoming/` รอ execution จบ แล้วสรุปขั้นที่แต่ละ execution ผ่าน |
 | `all` | `setup` -> `deploy` -> `view` -> `run` |
@@ -67,10 +67,11 @@
 |---|---|
 | `PipelineSucceeded` | ผ่านทุกขั้น เขียน `curated/_SUCCESS.json` แล้ว |
 | `WaitingForOtherSources` | ไฟล์นี้ลง trusted แล้ว แต่แหล่งอื่นของปีเดียวกันยังไม่ครบ (execution ของไฟล์ที่มาทีหลังจะทำ transform + verify) |
-| `AlreadyProcessed` | ไฟล์เนื้อหาเดียวกันเคยสำเร็จแล้ว ย้ายไป `quarantine/duplicate/` (รันซ้ำจะได้แบบนี้) |
-| `FileRejected` | ชื่อไฟล์ไม่ใช่ `<source>_<year>.csv` หรือไม่มี contract |
+| `AlreadyProcessed` | ไฟล์เนื้อหาเดียวกันเคยสำเร็จแล้ว `QuarantineFile` ย้ายไป `quarantine/duplicate/<source>/` (รันซ้ำจะได้แบบนี้) |
+| `FileRejected` | ชื่อไฟล์ไม่ใช่ `<source>_<year>.csv` หรือไม่มี contract `QuarantineFile` ย้ายไป `quarantine/rejected/` (ไม่ค้างใน `incoming/`) |
 | `BatchBlocked` | ไฟล์เสียทั้งไฟล์ (คอลัมน์หาย ไฟล์ว่าง) เก็บใน `quarantine/` ไม่แตะ trusted |
-| `VerifyFailed` | curated ไม่ผ่าน (จำนวนแถว / key ซ้ำ / coverage) |
+| `ZoneMismatch` | trusted ของปีนั้นมี `zone_type` ไม่ตรงกันระหว่าง 3 แหล่ง (เช่นแถวเวอร์ชันจุดเดิมค้าง) ไม่ MERGE ให้อัปไฟล์ polygon ใหม่ครบ 3 แหล่ง |
+| `VerifyFailed` | curated ไม่ผ่าน (จำนวนแถว / key ซ้ำ / coverage / `zone_type` ปน) |
 | `PipelineFailed` | Lambda error หลัง retry ดู error ในกราฟของ execution |
 
 ดูทีละขั้น: Step Functions console -> `ronnai-pipeline` -> เลือก execution -> **Graph view**
@@ -119,5 +120,7 @@ Learner Lab ของแต่ละคนเป็น AWS account แยกก�
 | `ไม่พบ state machine ... รัน deploy ก่อน` | รัน `./infra/ronnai_aws.sh deploy` (หรือ `all`) |
 | `[WARN] ตั้ง public access block / lifecycle ไม่ได้` | Learner Lab บางรุ่นไม่ให้สิทธิ์ ข้ามได้ |
 | `Bytes scanned limit was exceeded` | query สแกนเกิน limit ให้กรองให้แคบลง หรือ `SCAN_LIMIT_MB=...` แล้วรัน `setup` ใหม่ |
+| `BatchBlocked` ด้วย `ไม่มีคอลัมน์ ['zone_type']` | เป็นไฟล์ CSV เวอร์ชันจุดเดิม export ใหม่จาก `gee/ronnai_community_zonal.js` (เวอร์ชัน polygon) |
+| `TransformCurated` error `zone_type` / `COLUMN_NOT_FOUND` ในบัญชีที่ deploy ก่อน #33 | ตาราง trusted/curated เดิมไม่มีคอลัมน์ `zone_type` ใน Athena รัน `DROP TABLE ronnai_trusted.lst` (ndvi, buildings) และ `DROP TABLE ronnai_curated.community_heat` แล้วลบ `s3://<bucket>/trusted/` กับ `curated/community_heat/` จากนั้น `deploy` + `run` ใหม่ (lab ใหม่ไม่ต้องทำ) |
 | `ไม่พบ data/gee_2026/...` | วางไฟล์ CSV 3 ไฟล์ไว้ใน `data/gee_2026/` (ไม่อยู่ใน git) หรือตั้ง `YEAR=` |
 | ภาษาไทยเป็นตัวอ่านไม่ออก | ใช้ Windows Terminal หรือ `chcp 65001` |

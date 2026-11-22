@@ -27,7 +27,7 @@ destroy_pipeline() {   # ลบกฎ EventBridge ก่อน (กันไฟ�
 
 destroy() {
   preflight
-  printf '\n\033[31mจะลบถาวร:\033[0m state machine + Lambda 6 ตัว (%s-*), กฎ EventBridge, bucket s3://%s (รวม raw/ และ quarantine/), Glue DB %s %s, workgroup %s\n' \
+  printf '\n\033[31mจะลบถาวร:\033[0m state machine + Lambda 7 ตัว (%s-*), กฎ EventBridge, bucket s3://%s (รวม raw/ และ quarantine/), Glue DB %s %s, workgroup %s\n' \
     "$NAME_PREFIX" "$BUCKET" "$DB_TRUSTED" "$DB_CURATED" "$WORKGROUP"
   read -r -p "พิมพ์ชื่อ bucket เพื่อยืนยัน: " answer
   [[ "$answer" == "$BUCKET" ]] || die "ยกเลิก (ชื่อไม่ตรง)"

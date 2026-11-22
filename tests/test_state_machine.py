@@ -45,6 +45,8 @@ def test_tasks_call_deployed_lambdas_in_order():
     funcs = re.findall(r'^\s+"([a-z-]+):[a-z_]+_function:', DEPLOY.read_text(encoding="utf-8"), re.M)
     assert funcs[0] == "start-pipeline"                                     # ตัวเริ่ม execution (ไม่อยู่ใน state machine)
     funcs = funcs[1:]
+    assert funcs[-1] == "quarantine-file"                                   # (#32) ทางแยกของไฟล์ซ้ำ/ชื่อผิด ไม่อยู่บนทางหลัก
+    funcs = funcs[:-1]
     assert funcs == ["check-batch", "ingest-batch", "validate-batch", "transform-batch", "verify-batch"]
     order, n = [], d["StartAt"]
     while n:
@@ -78,6 +80,18 @@ def test_placeholders_are_only_the_ones_deploy_fills():
     assert set(re.findall(r"\$\{([A-Z_]+)\}", ASL.read_text(encoding="utf-8"))) == {"REGION", "ACCOUNT_ID", "NAME_PREFIX"}
 
 
+def test_duplicate_and_rejected_go_through_quarantine_file():
+    """(#32) ALREADY_PROCESSED / REJECTED ต้องผ่าน QuarantineFile ก่อนจบที่ AlreadyProcessed / FileRejected"""
+    st = load()["States"]
+    nxt = {c["StringEquals"]: c["Next"] for c in st["IsNewFile"]["Choices"]}
+    assert nxt["ALREADY_PROCESSED"] == nxt["REJECTED"] == "QuarantineFile"
+    q = st["QuarantineFile"]
+    assert q["Resource"].endswith(":function:${NAME_PREFIX}-quarantine-file")
+    after = st[q["Next"]]
+    assert {c["StringEquals"]: c["Next"] for c in after["Choices"]} == {"ALREADY_PROCESSED": "AlreadyProcessed"}
+    assert after["Default"] == "FileRejected"
+
+
 def test_start_function_execution_name():
     import importlib.util
     spec = importlib.util.spec_from_file_location("start_fn", ROOT / "function" / "start_function" / "lambda_function.py")
@@ -98,3 +112,34 @@ def test_start_function_ignores_folder_marker():
     assert m.should_start("incoming/lst_2026.csv")
     out = m.lambda_handler({"id": "x", "detail": {"bucket": {"name": "b"}, "object": {"key": "incoming/"}}})
     assert out["status"] == "IGNORED"                                    # ไม่เรียก Step Functions เลย
+
+
+# ---------------------------------------------------------------- zone_type (#33)
+def _transform():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "transform_fn", ROOT / "function" / "transform_function" / "lambda_function.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_transform_zone_check_passes_when_all_sources_match():
+    tf = _transform()
+    rows = [{"source": s, "zone_type": "polygon_r150"} for s in tf.SOURCES]
+    zones, problems = tf.zone_problems(rows)
+    assert problems == [] and zones == {s: ["polygon_r150"] for s in tf.SOURCES}
+
+
+def test_transform_zone_check_catches_old_point_rows_and_mismatch():
+    tf = _transform()
+    _, problems = tf.zone_problems([{"source": "lst", "zone_type": "polygon_r150"},
+                                    {"source": "ndvi", "zone_type": None},          # แถวเวอร์ชันจุดค้าง
+                                    {"source": "buildings", "zone_type": "polygon_r200"}])
+    assert any("ndvi" in p for p in problems) and any("ต่างกัน" in p for p in problems)
+
+
+def test_transform_zone_sql_covers_all_sources_and_year():
+    tf = _transform()
+    sql = tf.zone_type_sql("ronnai_trusted", 2026)
+    assert all(f"ronnai_trusted.{s} WHERE year = 2026" in sql for s in tf.SOURCES)

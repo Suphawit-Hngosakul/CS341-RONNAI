@@ -25,12 +25,12 @@ FIXTURES = ROOT / "tests" / "fixtures"
 DATA = ROOT / "data" / "gee_2026"
 CFG = {"s3": {"bucket": "cs341-ronnai-test", "prefixes": {}}}
 
-LST_HEADER = "community_id,buffer_m,year,lst_mean,lst_p90,valid_pixel_ratio,n_scenes"
+LST_HEADER = "community_id,buffer_m,year,lst_mean,lst_p90,valid_pixel_ratio,n_scenes,zone_type"
 GOOD_LST = [
-    "C0001,300,2026,48.2,50.1,1.0,11",
-    "C0001,500,2026,47.9,49.8,1.0,11",
-    "C0002,300,2026,46.3,49.6,1.0,11",
-    "C0002,500,2026,46.0,49.1,1.0,11",
+    "C0001,300,2026,48.2,50.1,1.0,11,polygon_r150",
+    "C0001,500,2026,47.9,49.8,1.0,11,polygon_r150",
+    "C0002,300,2026,46.3,49.6,1.0,11,polygon_r150",
+    "C0002,500,2026,46.0,49.1,1.0,11,polygon_r150",
 ]
 
 
@@ -66,8 +66,8 @@ def test_clean_file_passes():
 
 
 def test_standardize_bom_whitespace_and_header_names():
-    header = "﻿ Community_ID ,buffer_m,year,LST_mean,lst_p90,valid pixel ratio,n_scenes"
-    rows = ["  C0001 , 300 ,2026, 48.2 ,50.1,1.0,11", *GOOD_LST[1:]]
+    header = "﻿ Community_ID ,buffer_m,year,LST_mean,lst_p90,valid pixel ratio,n_scenes,zone_type"
+    rows = ["  C0001 , 300 ,2026, 48.2 ,50.1,1.0,11,polygon_r150", *GOOD_LST[1:]]
     r = run("lst", csv(header, rows))
     assert r.report["status"] == "PASSED", r.report
     assert r.trusted.loc[0, "community_id"] == "C0001"
@@ -77,9 +77,9 @@ def test_standardize_bom_whitespace_and_header_names():
 
 
 def test_building_count_float_string_becomes_int():
-    header = "community_id,buffer_m,year,builtup_pct,building_count"
-    r = run("buildings", csv(header, ["C0001,300,2026,36.3,751.0", "C0001,500,2026,30.1,",
-                                      "C0002,300,2026,27.6,0.0"]))
+    header = "community_id,buffer_m,year,builtup_pct,building_count,zone_type"
+    r = run("buildings", csv(header, ["C0001,300,2026,36.3,751.0,polygon_r150", "C0001,500,2026,30.1,,polygon_r150",
+                                      "C0002,300,2026,27.6,0.0,polygon_r150"]))
     assert r.report["passed"] == 3
     assert str(r.trusted["building_count"].dtype) == "Int64"
     assert r.trusted["building_count"].tolist()[0] == 751
@@ -90,8 +90,8 @@ def test_building_count_float_string_becomes_int():
 
 
 def test_non_integral_int_is_blocked():
-    header = "community_id,buffer_m,year,builtup_pct,building_count"
-    r = run("buildings", csv(header, ["C0001,300,2026,36.3,751.5", "C0002,300,2026,27.6,509"]))
+    header = "community_id,buffer_m,year,builtup_pct,building_count,zone_type"
+    r = run("buildings", csv(header, ["C0001,300,2026,36.3,751.5,polygon_r150", "C0002,300,2026,27.6,509,polygon_r150"]))
     assert rules(r) == {"building_count is int": 1}
     assert r.report["passed"] == 1
 
@@ -99,7 +99,7 @@ def test_non_integral_int_is_blocked():
 # ---------------------------------------------------------------- BLOCK แถว
 
 def test_lst_120_goes_to_quarantine():
-    rows = [*GOOD_LST, "C0014,300,2026,120.4,121.0,1.0,11"]
+    rows = [*GOOD_LST, "C0014,300,2026,120.4,121.0,1.0,11,polygon_r150"]
     r = run("lst", csv(LST_HEADER, rows))
     assert r.report["status"] == "PARTIAL"
     assert rules(r) == {"lst_mean between 15 and 70": 1, "lst_p90 between 15 and 70": 1}
@@ -111,13 +111,13 @@ def test_lst_120_goes_to_quarantine():
 
 
 @pytest.mark.parametrize("row, rule", [
-    ("C9999,300,2026,48.2,50.1,1.0,11", "community_id in master list"),
-    ("C0003,400,2026,48.2,50.1,1.0,11", "buffer_m in [300, 500]"),
-    ("C0003,300,2026,abc,50.1,1.0,11", "lst_mean is float"),
-    ("C0003,300,2026,,50.1,1.0,11", "lst_mean not null"),
-    ("C0003,300,2026,48.2,50.1,1.5,11", "valid_pixel_ratio between 0 and 1"),
-    ("C0003,300,2026,48.2,50.1,1.0,-1", "n_scenes >= 0"),
-    ("C0003,300,2025,48.2,50.1,1.0,11", "year == 2026"),
+    ("C9999,300,2026,48.2,50.1,1.0,11,polygon_r150", "community_id in master list"),
+    ("C0003,400,2026,48.2,50.1,1.0,11,polygon_r150", "buffer_m in [300, 500]"),
+    ("C0003,300,2026,abc,50.1,1.0,11,polygon_r150", "lst_mean is float"),
+    ("C0003,300,2026,,50.1,1.0,11,polygon_r150", "lst_mean not null"),
+    ("C0003,300,2026,48.2,50.1,1.5,11,polygon_r150", "valid_pixel_ratio between 0 and 1"),
+    ("C0003,300,2026,48.2,50.1,1.0,-1,polygon_r150", "n_scenes >= 0"),
+    ("C0003,300,2025,48.2,50.1,1.0,11,polygon_r150", "year == 2026"),
 ])
 def test_block_rules(row, rule):
     r = run("lst", csv(LST_HEADER, [*GOOD_LST, row]))
@@ -127,7 +127,7 @@ def test_block_rules(row, rule):
 
 
 def test_duplicate_key_quarantines_all_copies():
-    rows = [*GOOD_LST, "C0001,300,2026,40.0,45.0,1.0,11"]
+    rows = [*GOOD_LST, "C0001,300,2026,40.0,45.0,1.0,11,polygon_r150"]
     r = run("lst", csv(LST_HEADER, rows))
     assert rules(r) == {"unique key (community_id, buffer_m, year)": 2}
     assert r.report["passed"] == 3
@@ -135,15 +135,15 @@ def test_duplicate_key_quarantines_all_copies():
 
 
 def test_ndvi_out_of_range():
-    header = "community_id,buffer_m,year,ndvi_mean,green_ratio,valid_pixel_ratio,n_scenes"
-    r = run("ndvi", csv(header, ["C0001,300,2026,0.2,0.24,1.0,23", "C0002,300,2026,1.7,0.4,1.0,23"]))
+    header = "community_id,buffer_m,year,ndvi_mean,green_ratio,valid_pixel_ratio,n_scenes,zone_type"
+    r = run("ndvi", csv(header, ["C0001,300,2026,0.2,0.24,1.0,23,polygon_r150", "C0002,300,2026,1.7,0.4,1.0,23,polygon_r150"]))
     assert rules(r) == {"ndvi_mean between -1 and 1": 1}
 
 
 # ---------------------------------------------------------------- WARN
 
 def test_low_valid_pixel_ratio_is_warn_only():
-    r = run("lst", csv(LST_HEADER, [*GOOD_LST, "C0003,300,2026,48.2,50.1,0.2,11"]))
+    r = run("lst", csv(LST_HEADER, [*GOOD_LST, "C0003,300,2026,48.2,50.1,0.2,11,polygon_r150"]))
     assert r.report["quarantined"] == 0 and r.report["passed"] == 5
     assert r.report["warnings"][0]["rule"] == "valid_pixel_ratio >= 0.3"
 
@@ -229,8 +229,8 @@ def test_trusted_upsert_is_idempotent_and_keeps_last_good(tmp_path):
     tpath = tmp_path / "lake" / "trusted" / "lst" / "year=2026" / "lst.parquet"
     assert len(pd.read_parquet(tpath)) == 4
     # batch ใหม่: C0001/300 ผิด -> ค่าเดิมใน trusted ยังอยู่, C0002/300 ถูกแก้ค่า
-    gate_local(tmp_path, "lst", csv(LST_HEADER, ["C0001,300,2026,120,50,1.0,11",
-                                                 "C0002,300,2026,44.4,49.6,1.0,11"]), "b3")
+    gate_local(tmp_path, "lst", csv(LST_HEADER, ["C0001,300,2026,120,50,1.0,11,polygon_r150",
+                                                 "C0002,300,2026,44.4,49.6,1.0,11,polygon_r150"]), "b3")
     t = pd.read_parquet(tpath).set_index(["community_id", "buffer_m"])
     assert len(t) == 4
     assert t.loc[("C0001", 300), "lst_mean"] == 48.2
@@ -293,3 +293,21 @@ def test_cli_local_mode(tmp_path):
     assert gate.main(argv) == gate.EXIT_BATCH_BLOCKED
     assert gate.main(argv) == gate.EXIT_BATCH_BLOCKED   # batch_id ใหม่อัตโนมัติ ไม่ชนของเดิม
     assert len(list((tmp_path / "lake" / "quarantine" / "lst").iterdir())) == 2
+
+
+# ---------------------------------------------------------------- zone_type (#33)
+def test_point_version_file_without_zone_type_is_blocked():
+    """ไฟล์ CSV เวอร์ชันจุดเดิม (ก่อน #33 ไม่มีคอลัมน์ zone_type) ต้องถูกกักทั้ง batch"""
+    header = LST_HEADER.replace(",zone_type", "")
+    rows = [g.replace(",polygon_r150", "") for g in GOOD_LST]
+    r = run("lst", csv(header, rows))
+    assert r.blocked_batch and r.report["status"] == "BATCH_BLOCKED"
+    assert "zone_type" in r.report["violations"][0]["detail"]
+
+
+def test_wrong_zone_type_row_goes_to_quarantine():
+    r = run("lst", csv(LST_HEADER, [*GOOD_LST, "C0003,300,2026,48.2,50.1,1.0,11,point"]))
+    assert r.report["status"] == "PARTIAL"
+    assert rules(r) == {"zone_type in ['polygon_r150']": 1}
+    assert set(r.trusted["zone_type"]) == {"polygon_r150"}
+    assert_no_rows_lost(r)

@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# deploy: ตาราง trusted + Lambda 6 ตัว + state machine + trigger (S3 -> EventBridge -> start-pipeline)
+# deploy: ตาราง trusted + Lambda 7 ตัว + state machine + trigger (S3 -> EventBridge -> start-pipeline)
 # ใช้ผ่าน infra/ronnai_aws.sh เท่านั้น (อาศัยตัวแปรที่ตั้งไว้ในไฟล์นั้น)
 
 preflight_deploy() {   # ตรวจเพิ่มสำหรับ deploy (ต้องรัน preflight ก่อน)
@@ -78,7 +78,7 @@ build_packages() {
 }
 
 deploy_lambdas() {
-  step "Lambda 6 ตัว (start-pipeline + 5 ขั้นของ state machine)"
+  step "Lambda 7 ตัว (start-pipeline + 5 ขั้นของ state machine + quarantine-file)"
   local spec name dir to mem kind fn key envs zip
   local -a code_new code_upd layers
   envs="Variables={BUCKET=$BUCKET,ATHENA_WORKGROUP=$WORKGROUP,CURATED_DB=$DB_CURATED,TRUSTED_DB=$DB_TRUSTED,STATE_MACHINE_ARN=$(sfn_arn)}"
@@ -207,7 +207,8 @@ deploy() {
     "                  CheckBatch -> IngestBatch -> ValidateBatch -> TransformCurated -> VerifyCurated" \
     "  ต่อด้วย: ./infra/ronnai_aws.sh view   (สร้างตาราง curated + view curated_*)" \
     "  รันทั้ง pipeline: ./infra/ronnai_aws.sh run   (อัปโหลด data/gee_$YEAR/ ทั้ง 3 แหล่ง แล้วรอดูผลแต่ละขั้น)" \
-    "  ไฟล์ซ้ำ (เคยสำเร็จแล้ว) จะถูกย้ายไป s3://$BUCKET/quarantine/duplicate/ และ execution จบที่ AlreadyProcessed" \
+    "  ไฟล์ซ้ำ (เคยสำเร็จแล้ว) จะถูกย้ายไป s3://$BUCKET/quarantine/duplicate/ (โดย $NAME_PREFIX-quarantine-file) และ execution จบที่ AlreadyProcessed" \
+    "  ไฟล์ชื่อผิด/ไม่มี contract จะถูกย้ายไป s3://$BUCKET/quarantine/rejected/ และ execution จบที่ FileRejected" \
     "  ดูทีละขั้น: Step Functions console > $NAME_PREFIX-pipeline > execution > Graph view" \
     "  ดู log ของ Lambda: aws logs tail /aws/lambda/$NAME_PREFIX-check-batch --since 10m"
 }
